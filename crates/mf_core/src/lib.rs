@@ -19,19 +19,62 @@
 //! let threads = CpuControl::get_thread_count(None);
 //! ```
 
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use walkdir::WalkDir;
 
-/// Supported image file extensions for conversion.
-pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "tiff", "bmp", "avif"];
+/// Global flag to signal shutdown (e.g., on Ctrl+C).
+pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
-/// Supported video file extensions for encoding.
-pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v"];
+/// Supported image extensions for conversion.
+pub const IMAGE_EXTENSIONS: &[&str] = &["avif", "webp", "jpg", "jpeg", "png", "tiff", "bmp"];
 
-/// Supported archive file extensions.
+/// Supported archive extensions for image extraction.
 pub const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cbz"];
 
-/// Recursive file scanner with configurable depth.
+/// Supported video extensions for hardware-accelerated encoding.
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v"];
+
+/// Registry for active child process PIDs.
+static ACTIVE_PROCESSES: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+pub struct ProcessManager;
+
+impl ProcessManager {
+    /// Registers a child process PID.
+    pub fn register(pid: u32) {
+        if let Ok(mut pids) = ACTIVE_PROCESSES.lock() {
+            pids.insert(pid);
+        }
+    }
+
+    /// Unregisters a child process PID.
+    pub fn unregister(pid: u32) {
+        if let Ok(mut pids) = ACTIVE_PROCESSES.lock() {
+            pids.remove(&pid);
+        }
+    }
+
+    /// Kills all registered child processes.
+    pub fn kill_all() {
+        SHUTDOWN.store(true, Ordering::SeqCst);
+        if let Ok(mut pids) = ACTIVE_PROCESSES.lock() {
+            for &pid in pids.iter() {
+                // On Linux, we can use the kill command or libc.
+                // For simplicity and safety, we spawn a kill command.
+                let _ = std::process::Command::new("kill")
+                    .arg("-9")
+                    .arg(pid.to_string())
+                    .status();
+            }
+            pids.clear();
+        }
+    }
+}
+
 pub struct Scanner {
     /// Maximum recursion depth for directory traversal.
     pub max_depth: usize,

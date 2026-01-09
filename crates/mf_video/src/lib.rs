@@ -1,6 +1,6 @@
 use clap::Args as ClapArgs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use mf_core::{Scanner, VIDEO_EXTENSIONS};
+use mf_core::{ProcessManager, SHUTDOWN, Scanner, VIDEO_EXTENSIONS};
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use regex::Regex;
@@ -9,7 +9,9 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use thiserror::Error;
 
 /// Video processing errors with context-specific information.
@@ -58,6 +60,7 @@ pub enum VideoError {
 pub type Result<T> = std::result::Result<T, VideoError>;
 
 /// Cached regex for parsing FFmpeg progress output.
+/// It matches 'time=HH:MM:SS.ms' format.
 static FFMPEG_PROGRESS_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"time=(\d+):(\d+):(\d+\.\d+)")
         .expect("FFmpeg progress regex is hardcoded and should always compile")
@@ -195,12 +198,18 @@ fn collect_video_tasks(
     let pb_scan = ProgressBar::new(files.len() as u64);
     pb_scan.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner} Scanning {pos}/{len}")
+            .template("{spinner} Analyzing {pos}/{len} ({msg})")
             .map_err(VideoError::from)?,
     );
 
     pool.install(|| {
         files.par_iter().for_each(|file| {
+            let name = file
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            pb_scan.set_message(name.to_string());
+
             let ext = file
                 .extension()
                 .and_then(|s| s.to_str())
@@ -230,10 +239,10 @@ fn collect_video_tasks(
     });
     pb_scan.finish_and_clear();
 
-    let tasks = Arc::try_unwrap(tasks_mutex)
-        .map_err(|_| VideoError::GpuError("Failed to unwrap task list".into()))?
-        .into_inner()
-        .map_err(|_| VideoError::GpuError("Failed to unlock task list".into()))?;
+    let tasks = (Arc::try_unwrap(tasks_mutex)
+        .map_err(|_| VideoError::GpuError("Failed to unwrap task list".into()))?)
+    .into_inner()
+    .map_err(|_| VideoError::GpuError("Failed to unlock task list".into()))?;
 
     Ok(tasks)
 }
@@ -245,41 +254,57 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     pb_main.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")?
-            .progress_chars("#>-"),
+            .progress_chars("#>- "),
     );
     pb_main.set_message("Total Video Progress");
 
     // Re-configure global thread pool for limited concurrency (heavy GPU usage)
-    let _ = rayon::ThreadPoolBuilder::new()
-        .num_threads(args.jobs)
-        .build_global();
+    let jobs = args.jobs;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(jobs)
+        .build()
+        .map_err(VideoError::from)?;
 
     let args = Arc::new(args);
     let pb_main = Arc::new(pb_main);
+    let start_time = Instant::now();
 
-    tasks.par_iter().for_each(|task| {
-        let pb_file = mp.add(ProgressBar::new(task.duration as u64));
-        pb_file.set_style(
-            ProgressStyle::default_bar()
-                .template("{msg} {bar:20} {percent}%")
-                .unwrap(),
-        );
-        pb_file.set_message(
-            task.src
+    pool.install(|| {
+        tasks.par_iter().for_each(|task| {
+            let pb_file = mp.add(ProgressBar::new(task.duration as u64));
+            pb_file.set_style(
+                ProgressStyle::default_bar()
+                    .template("  {msg}\n  {bar:40.magenta/blue} {percent}% {eta}")
+                    .unwrap()
+                    .progress_chars("=>-"),
+            );
+
+            let name = task
+                .src
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-        );
+                .unwrap_or_else(|| "unknown".to_string());
 
-        if let Err(e) = convert_video(task, &args, &pb_file) {
-            eprintln!("Error converting {:?}: {}", task.src, e);
-        }
+            let name_display = if name.len() > 50 {
+                format!("...{}", &name[name.len().saturating_sub(47)..])
+            } else {
+                name
+            };
 
-        mp.remove(&pb_file);
-        pb_main.inc(1);
+            pb_file.set_message(name_display);
+
+            if let Err(e) = convert_video(task, &args, &pb_file) {
+                mp.suspend(|| eprintln!("Error converting {:?}: {}", task.src, e));
+            }
+
+            pb_file.finish_and_clear();
+            mp.remove(&pb_file);
+            pb_main.inc(1);
+        });
     });
 
     pb_main.finish_with_message("Done!");
+    println!("Total time: {:.2?}", start_time.elapsed());
     Ok(())
 }
 
@@ -355,7 +380,8 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
         "-y",
         "-hide_banner",
         "-loglevel",
-        "info",
+        "error",  // Only errors to stderr
+        "-stats", // Force stats to stderr
         "-hwaccel",
         "cuda",
         "-hwaccel_output_format",
@@ -385,15 +411,30 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    if SHUTDOWN.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
     let mut child = cmd.spawn()?;
+    let pid = child.id();
+    ProcessManager::register(pid);
 
     let stderr = child
         .stderr
         .take()
         .ok_or(VideoError::ProcessOutputCaptureFailed)?;
-    let reader = BufReader::new(stderr);
 
-    for line in reader.lines().map_while(std::result::Result::ok) {
+    // We need to read byte by byte or using a custom delimiter because FFmpeg uses \r
+    let mut reader = BufReader::new(stderr);
+    let mut buffer = Vec::new();
+
+    while reader.read_until(b'\r', &mut buffer)? > 0 {
+        if SHUTDOWN.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            break;
+        }
+
+        let line = String::from_utf8_lossy(&buffer);
         if let Some(caps) = FFMPEG_PROGRESS_RE.captures(&line) {
             let h: u64 = caps[1].parse().unwrap_or(0);
             let m: u64 = caps[2].parse().unwrap_or(0);
@@ -401,13 +442,16 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
             let seconds = (h * 3600 + m * 60) as f64 + s;
             pb.set_position(seconds as u64);
         }
+        buffer.clear();
     }
 
     let status = child.wait()?;
-    if !status.success() {
+    ProcessManager::unregister(pid);
+
+    if !status.success() && !SHUTDOWN.load(Ordering::SeqCst) {
         return Err(VideoError::FfmpegFailed {
             code: status.code().unwrap_or(-1),
-            stderr: "Check ffmpeg logs for details".to_string(),
+            stderr: "Encoding failed. Check GPU memory or source file.".to_string(),
         });
     }
 

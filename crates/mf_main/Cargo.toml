@@ -8,8 +8,11 @@ name = "media-forge"
 path = "src/main.rs"
 
 [dependencies]
+mf_core = { path = "../mf_core" }
 mf_image = { path = "../mf_image" }
 mf_archive = { path = "../mf_archive" }
 mf_video = { path = "../mf_video" }
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
+mimalloc = "0.1"
+ctrlc = "3.4"

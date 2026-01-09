@@ -1,11 +1,12 @@
 use clap::Args as ClapArgs;
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use mf_core::{ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, Scanner};
+use mf_core::{ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, SHUTDOWN, Scanner};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use thiserror::Error;
@@ -402,6 +403,10 @@ fn process_tasks(
             pb_container.set_message(container_name.clone());
 
             tasks.par_iter().for_each(|task| {
+                if SHUTDOWN.load(Ordering::SeqCst) {
+                    return;
+                }
+
                 let name = match &task.task_type {
                     TaskType::File => task
                         .src_path
