@@ -60,11 +60,8 @@ pub fn run(args: VideoArgs) -> Result<()> {
     let scanner = Scanner::new(args.depth);
     let files = scanner.scan(&source_path);
 
-    // Pre-scan to filter videos and get duration
-    // We can parallelize metadata extraction
     let tasks_mutex = Arc::new(Mutex::new(Vec::new()));
 
-    // Use rayon for metadata extraction as it involves IO/subprocess
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(args.jobs.max(4)) // Allow more threads for lightweight probing
         .build()?;
@@ -224,20 +221,17 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
 
     cmd.arg(task.dest.to_str().unwrap());
 
-    // Merge stderr into stdout
     cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped()); // Actually ffmpeg output progress to stderr usually
+    cmd.stderr(Stdio::piped());
 
     let mut child = cmd.spawn()?;
 
-    // Read stderr for progress
     let stderr = child
         .stderr
         .take()
         .ok_or(anyhow!("Failed to capture stderr"))?;
     let reader = BufReader::new(stderr);
 
-    // Regex for time=HH:MM:SS.mm
     let re = Regex::new(r"time=(\d+):(\d+):(\d+\.\d+)").unwrap();
 
     for line in reader.lines().map_while(Result::ok) {
@@ -255,7 +249,6 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
         return Err(anyhow!("ffmpeg exited with {}", status));
     }
 
-    // Preserve mtime
     if let Ok(meta) = fs::metadata(&task.src)
         && let Ok(mtime) = meta.modified()
     {
