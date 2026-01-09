@@ -1,0 +1,11 @@
+[package]
+name = "mf_core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+walkdir = "2.5"
+num_cpus = "1.17"
+anyhow = "1.0"
+thiserror = "2.0"
+path-clean = "1.0"
