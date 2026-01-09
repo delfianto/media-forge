@@ -161,23 +161,27 @@ media-forge archive --recursive
 # Preview what would be archived (dry run)
 media-forge archive --dry-run
 
-# Archive and delete source folders
+# Preview cleanup operation (RECOMMENDED - always do this first!)
+media-forge archive --dry-run --cleanup
+
+# Archive and delete source folders (requires confirmation)
 media-forge archive --cleanup
 
-# Preview cleanup operation
-media-forge archive --dry-run --cleanup
+# Skip confirmation prompt (for automation only)
+media-forge archive --cleanup --force
 ```
 
 **Options:**
 
-| Option        | Short | Default        | Description                               |
-| ------------- | ----- | -------------- | ----------------------------------------- |
-| `destination` | -     | Same as source | Output directory for CBZ files            |
-| `--source`    | `-s`  | `.`            | Source directory containing image folders |
-| `--recursive` | -     | false          | Scan subdirectories for image folders     |
-| `--cleanup`   | -     | false          | Delete source folders after archiving     |
-| `--dry-run`   | `-n`  | false          | Show what would be done without executing |
-| `--jobs`      | `-j`  | 75% cores      | Number of parallel threads                |
+| Option        | Short | Default        | Description                                                        |
+| ------------- | ----- | -------------- | ------------------------------------------------------------------ |
+| `destination` | -     | Same as source | Output directory for CBZ files                                     |
+| `--source`    | `-s`  | `.`            | Source directory containing image folders                          |
+| `--recursive` | -     | false          | Scan subdirectories for image folders                              |
+| `--cleanup`   | -     | false          | Delete source folders after archiving (requires confirmation)      |
+| `--dry-run`   | `-n`  | false          | Show what would be done without executing                          |
+| `--force`     | -     | false          | Skip confirmation prompt for --cleanup (automation only)           |
+| `--jobs`      | `-j`  | 75% cores      | Number of parallel threads                                         |
 
 **Archive Structure:**
 
@@ -186,6 +190,30 @@ Files are automatically renamed for proper ordering in comic readers:
 - First image: `000_cover.ext`
 - Middle images: `page_001.ext`, `page_002.ext`, ...
 - Last image: `999_back.ext`
+
+**⚠️ Cleanup Safety:**
+
+When using `--cleanup`, the program implements multiple safety checks to prevent accidental data loss:
+
+1. **Interactive Confirmation**: You must type `DELETE` (all caps) to confirm deletion
+2. **Folder Preview**: Shows up to 10 folders that will be deleted before asking for confirmation
+3. **Clear Warnings**: Color-coded warnings (yellow/red) highlight the permanent nature of deletion
+4. **Dry-Run First**: Always recommended to run with `--dry-run --cleanup` first to preview operations
+5. **Archive Verification**: Verifies archive integrity before deleting source folders
+6. **Force Flag**: `--force` skips confirmation (use only in automated scripts with extreme caution)
+
+**Recommended Workflow:**
+
+```bash
+# Step 1: Preview what will be archived and deleted
+media-forge archive --dry-run --cleanup
+
+# Step 2: Review the output carefully
+
+# Step 3: If everything looks correct, run with confirmation
+media-forge archive --cleanup
+# (You will be prompted to type 'DELETE' to confirm)
+```
 
 ## Understanding Encoding Parameters
 
