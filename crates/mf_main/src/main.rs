@@ -1,5 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Parser)]
 #[command(name = "media-forge")]
@@ -48,6 +52,14 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    // Set up Ctrl-C handler to kill child processes and shutdown gracefully
+    ctrlc::set_handler(move || {
+        eprintln!("\n\x1b[31m[Interrupt] Shutting down and cleaning up child processes...\x1b[0m");
+        mf_core::ProcessManager::kill_all();
+        std::process::exit(130);
+    })
+    .expect("Error setting Ctrl-C handler");
+
     let cli = Cli::parse();
 
     match cli.command {
