@@ -1,7 +1,7 @@
 use clap::Args as ClapArgs;
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use mf_core::{ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, SHUTDOWN, Scanner};
+use mf_core::{ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, Naming, SHUTDOWN, Scanner, VIDEO_EXTENSIONS};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
@@ -133,6 +133,8 @@ enum TaskType {
     File,
     /// Processing an image file located within a ZIP/CBZ archive.
     Archive { internal_path: String },
+    /// Directly copying a non-image file.
+    Copy,
 }
 
 /// Represents a single image conversion job.
@@ -209,7 +211,7 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     let (tasks_by_container, total_files) =
         collect_tasks(files, &source_path, &dest_path, &args.format, num_threads)?;
     if tasks_by_container.is_empty() {
-        println!("No images or archives found to process.");
+        println!("No files found to process.");
         return Ok(());
     }
 
@@ -322,6 +324,23 @@ fn collect_tasks(
                     dest_path: target_file,
                     task_type: TaskType::File,
                 }]
+            } else if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+                let target_file = if source_path.is_file() {
+                    if dest_path.extension().is_some() {
+                        dest_path.to_path_buf()
+                    } else {
+                        dest_path.join(file.file_name().unwrap())
+                    }
+                } else {
+                    let rel_path = file.strip_prefix(source_path).unwrap_or(file);
+                    dest_path.join(rel_path)
+                };
+
+                vec![Task {
+                    src_path: file.clone(),
+                    dest_path: target_file,
+                    task_type: TaskType::Copy,
+                }]
             } else {
                 Vec::new()
             };
@@ -350,7 +369,7 @@ fn collect_tasks(
     let mut tasks_by_container: HashMap<String, Vec<Task>> = HashMap::new();
     for task in all_tasks {
         let container_name = match &task.task_type {
-            TaskType::File => task
+            TaskType::File | TaskType::Copy => task
                 .src_path
                 .strip_prefix(source_path)
                 .unwrap_or(&task.src_path)
@@ -472,7 +491,7 @@ fn process_tasks(
                 }
 
                 let name = match &task.task_type {
-                    TaskType::File => task
+                    TaskType::File | TaskType::Copy => task
                         .src_path
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -480,11 +499,7 @@ fn process_tasks(
                     TaskType::Archive { internal_path } => internal_path.clone(),
                 };
 
-                let name_display = if name.len() > 30 {
-                    format!("...{}", &name[name.len().saturating_sub(27)..])
-                } else {
-                    name
-                };
+                let name_display = Naming::truncate_from_start(&name, 30);
 
                 let pb_opt = {
                     let mut pool = spinner_pool.lock().unwrap();
@@ -533,6 +548,24 @@ fn process_tasks(
 
 /// Processes a single image conversion task.
 fn process_single_task(task: &Task, args: &ImageArgs) -> Result<()> {
+    if matches!(task.task_type, TaskType::Copy) {
+        if let Some(parent) = task.dest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&task.src_path, &task.dest_path)?;
+
+        if !args.no_mtime {
+            if let Ok(metadata) = fs::metadata(&task.src_path) {
+                if let Ok(mtime) = metadata.modified() {
+                    if let Ok(file) = fs::File::open(&task.dest_path) {
+                        file.set_modified(mtime).ok();
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
     let img_data = match &task.task_type {
         TaskType::File => fs::read(&task.src_path)?,
         TaskType::Archive { internal_path } => {
@@ -543,6 +576,7 @@ fn process_single_task(task: &Task, args: &ImageArgs) -> Result<()> {
             std::io::Read::read_to_end(&mut a_file, &mut buffer)?;
             buffer
         }
+        TaskType::Copy => unreachable!("Copy tasks are handled earlier"),
     };
 
     let img = image::load_from_memory(&img_data)?;

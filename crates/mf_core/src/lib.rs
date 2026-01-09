@@ -22,7 +22,7 @@ pub const IMAGE_EXTENSIONS: &[&str] = &["avif", "webp", "jpg", "jpeg", "png", "t
 pub const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cbz"];
 
 /// Supported video extensions for hardware-accelerated encoding.
-pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v"];
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v", "mpv", "webm"];
 
 /// Registry for active child process PIDs.
 static ACTIVE_PROCESSES: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
@@ -104,6 +104,26 @@ impl Scanner {
     pub fn scan(&self, root: &Path) -> Vec<PathBuf> {
         self.scan_with_callback(root, |_| {})
     }
+
+    /// Scans a directory for all files with a progress callback.
+    pub fn scan_all_with_callback<F>(&self, root: &Path, mut callback: F) -> Vec<PathBuf>
+    where
+        F: FnMut(&Path),
+    {
+        WalkDir::new(root)
+            .max_depth(self.max_depth)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .inspect(|e| callback(e.path()))
+            .filter(|e| e.file_type().is_file())
+            .map(|e| e.path().to_path_buf())
+            .collect()
+    }
+
+    /// Scans a directory for all files.
+    pub fn scan_all(&self, root: &Path) -> Vec<PathBuf> {
+        self.scan_all_with_callback(root, |_| {})
+    }
 }
 
 /// CPU thread count management utilities.
@@ -138,6 +158,20 @@ impl Naming {
         } else {
             let truncated: String = name.chars().take(max_len.saturating_sub(3)).collect();
             format!("{}...", truncated)
+        }
+    }
+
+    /// Truncates a filename to fit within a maximum length by keeping the end of the name,
+    /// handling Unicode correctly.
+    pub fn truncate_from_start(name: &str, max_len: usize) -> String {
+        let char_count = name.chars().count();
+        if char_count <= max_len {
+            name.to_string()
+        } else {
+            let keep_len = max_len.saturating_sub(3);
+            let suffix: String = name.chars().rev().take(keep_len).collect();
+            let reversed: String = suffix.chars().rev().collect();
+            format!("...{}", reversed)
         }
     }
 
@@ -179,12 +213,31 @@ mod tests {
     }
 
     #[test]
+    fn test_truncate_from_start() {
+        assert_eq!(Naming::truncate_from_start("🦀🦀🦀🦀🦀", 4), "...🦀");
+        assert_eq!(Naming::truncate_from_start("long_filename.txt", 10), "...ame.txt");
+    }
+
+    #[test]
     fn test_is_cover_image() {
         assert!(Naming::is_cover_image("000_cover.jpg"));
         assert!(Naming::is_cover_image("000.png"));
         assert!(Naming::is_cover_image("front_cover.webp"));
         assert!(Naming::is_cover_image("Folder.jpg"));
         assert!(!Naming::is_cover_image("page_005.jpg"));
+    }
+
+    #[test]
+    fn test_scanner_all_files() {
+        use std::fs::File;
+        let temp_dir = tempfile::tempdir().unwrap();
+        File::create(temp_dir.path().join("test.txt")).unwrap();
+        File::create(temp_dir.path().join("test.mp4")).unwrap();
+        File::create(temp_dir.path().join("test.jpg")).unwrap();
+
+        let scanner = Scanner::new(1);
+        let files = scanner.scan_all(temp_dir.path());
+        assert_eq!(files.len(), 3);
     }
 
     #[test]
