@@ -59,8 +59,7 @@ pub enum VideoError {
 
 pub type Result<T> = std::result::Result<T, VideoError>;
 
-/// Cached regex for parsing FFmpeg progress output.
-/// It matches 'time=HH:MM:SS.ms' format.
+/// Cached regex for parsing FFmpeg progress output ('time=HH:MM:SS.ms').
 static FFMPEG_PROGRESS_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"time=(\d+):(\d+):(\d+\.\d+)")
         .expect("FFmpeg progress regex is hardcoded and should always compile")
@@ -98,19 +97,21 @@ pub struct VideoArgs {
     pub depth: usize,
 }
 
+/// Represents a single video encoding task.
 #[derive(Debug, Clone)]
 struct VideoTask {
+    /// Source video file path.
     src: PathBuf,
+    /// Destination video file path.
     dest: PathBuf,
+    /// Duration of the video in seconds for progress tracking.
     duration: f64,
 }
 
 /// Main entry point for video encoding.
 pub fn run(args: VideoArgs) -> anyhow::Result<()> {
-    // Check requirements
     check_requirements()?;
 
-    // Resolve paths
     let source_path = fs::canonicalize(&args.source)
         .map_err(|_| VideoError::SourceNotFound(args.source.clone()))?;
 
@@ -144,7 +145,6 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
     });
     pb_scan_dir.finish_and_clear();
 
-    // Discover tasks
     let tasks = collect_video_tasks(files, &source_path, &dest_path, &args)?;
 
     println!("Found {} videos to process.", tasks.len());
@@ -152,13 +152,12 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Execute tasks
     process_video_tasks(tasks, args)?;
 
     Ok(())
 }
 
-/// Verifies that ffmpeg and ffprobe are available.
+/// Verifies that ffmpeg and ffprobe are available in the system PATH.
 fn check_requirements() -> Result<()> {
     if Command::new("ffprobe")
         .arg("-version")
@@ -181,7 +180,7 @@ fn check_requirements() -> Result<()> {
     Ok(())
 }
 
-/// Collects video encoding tasks in parallel.
+/// Collects video encoding tasks in parallel by probing file metadata.
 fn collect_video_tasks(
     files: Vec<PathBuf>,
     source_path: &Path,
@@ -190,7 +189,6 @@ fn collect_video_tasks(
 ) -> Result<Vec<VideoTask>> {
     let tasks_mutex = Arc::new(Mutex::new(Vec::new()));
 
-    // Use a temporary thread pool for scanning to avoid interfering with global pool
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads((num_cpus::get() / 2).max(4))
         .build()?;
@@ -247,7 +245,7 @@ fn collect_video_tasks(
     Ok(tasks)
 }
 
-/// Executes video encoding tasks with progress tracking.
+/// Executes video encoding tasks with progress tracking and controlled concurrency.
 fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     let mp = MultiProgress::new();
     let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
@@ -258,7 +256,6 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     );
     pb_main.set_message("Total Video Progress");
 
-    // Re-configure global thread pool for limited concurrency (heavy GPU usage)
     let jobs = args.jobs;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(jobs)
@@ -308,11 +305,15 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     Ok(())
 }
 
+/// Minimal video metadata required for task planning.
 struct VideoMeta {
+    /// Duration in seconds.
     duration: f64,
+    /// Name of the video codec (e.g., "h264", "av1").
     codec: String,
 }
 
+/// Retrieves video metadata using ffprobe.
 fn get_video_metadata(path: &Path) -> Result<VideoMeta> {
     let path_str = path
         .to_str()
@@ -361,6 +362,7 @@ fn get_video_metadata(path: &Path) -> Result<VideoMeta> {
     Ok(VideoMeta { duration, codec })
 }
 
+/// Encodes a single video file to AV1 using FFmpeg and NVIDIA hardware acceleration.
 fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result<()> {
     if let Some(parent) = task.dest.parent() {
         fs::create_dir_all(parent)?;
@@ -380,8 +382,8 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
         "-y",
         "-hide_banner",
         "-loglevel",
-        "error",  // Only errors to stderr
-        "-stats", // Force stats to stderr
+        "error",
+        "-stats",
         "-hwaccel",
         "cuda",
         "-hwaccel_output_format",
@@ -424,7 +426,6 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
         .take()
         .ok_or(VideoError::ProcessOutputCaptureFailed)?;
 
-    // We need to read byte by byte or using a custom delimiter because FFmpeg uses \r
     let mut reader = BufReader::new(stderr);
     let mut buffer = Vec::new();
 

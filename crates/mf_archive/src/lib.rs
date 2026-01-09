@@ -77,21 +77,22 @@ pub struct ArchiveArgs {
     pub force: bool,
 }
 
+/// Represents a single directory to be archived into a CBZ file.
 struct ArchiveTask {
+    /// Path to the source directory containing images.
     src_dir: PathBuf,
+    /// Target path for the generated .cbz file.
     dest_cbz: PathBuf,
 }
 
 /// Main entry point for archive creation.
 pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
-    // Configure thread pool
     let num_threads = CpuControl::get_thread_count(args.jobs);
     rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build_global()
         .map_err(ArchiveError::from)?;
 
-    // Resolve paths
     let source_path = fs::canonicalize(&args.source)
         .map_err(|_| ArchiveError::SourceNotFound(args.source.clone()))?;
 
@@ -109,7 +110,6 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
         })
         .transpose()?;
 
-    // Discover image folders to archive
     println!("Scanning {} for image folders...", source_path.display());
     let pb_scan = ProgressBar::new_spinner();
     pb_scan.set_style(
@@ -136,23 +136,21 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Handle dry-run mode
     if args.dry_run {
         display_dry_run_preview(&tasks, args.cleanup);
         return Ok(());
     }
 
-    // Safety check: Require confirmation before cleanup unless --force is used
     if args.cleanup && !args.force && !prompt_for_cleanup_confirmation(&tasks)? {
         return Ok(());
     }
 
-    // Execute archive tasks
     execute_archive_tasks(tasks, Arc::new(args), num_threads)?;
 
     Ok(())
 }
 
+/// Collects archive tasks by scanning for folders containing images.
 fn collect_archive_tasks<F>(
     source_root: &Path,
     dest_root: &Option<PathBuf>,
@@ -174,6 +172,7 @@ where
     Ok(tasks)
 }
 
+/// Recursively traverses directories to identify folders with images.
 fn find_image_folders<F>(
     current: &Path,
     source_root: &Path,
@@ -242,6 +241,7 @@ where
     Ok(())
 }
 
+/// Displays a summary of operations that would be performed in dry-run mode.
 fn display_dry_run_preview(tasks: &[ArchiveTask], cleanup: bool) {
     println!("-- DRY RUN: {} tasks --", tasks.len());
     for task in tasks {
@@ -254,6 +254,7 @@ fn display_dry_run_preview(tasks: &[ArchiveTask], cleanup: bool) {
     }
 }
 
+/// Prompts the user for explicit confirmation before deleting source folders.
 fn prompt_for_cleanup_confirmation(tasks: &[ArchiveTask]) -> anyhow::Result<bool> {
     println!("\n\x1b[33m⚠️  WARNING: CLEANUP MODE ENABLED\x1b[0m");
     println!(
@@ -288,6 +289,7 @@ fn prompt_for_cleanup_confirmation(tasks: &[ArchiveTask]) -> anyhow::Result<bool
     Ok(true)
 }
 
+/// Executes archive tasks in parallel with multi-level progress bars.
 fn execute_archive_tasks(
     tasks: Vec<ArchiveTask>,
     args: Arc<ArchiveArgs>,
@@ -335,6 +337,7 @@ fn execute_archive_tasks(
     Ok(())
 }
 
+/// Creates a single CBZ archive from a folder of images.
 fn create_cbz(task: &ArchiveTask, args: &ArchiveArgs) -> Result<()> {
     if let Some(parent) = task.dest_cbz.parent() {
         fs::create_dir_all(parent)?;
@@ -359,6 +362,7 @@ fn create_cbz(task: &ArchiveTask, args: &ArchiveArgs) -> Result<()> {
     Ok(())
 }
 
+/// Gathers image files from a directory and sorts them naturally for archiving.
 fn collect_and_sort_images(src_dir: &Path) -> Result<Vec<fs::DirEntry>> {
     let mut files: Vec<_> = fs::read_dir(src_dir)?
         .filter_map(|e| e.ok())
@@ -391,6 +395,7 @@ fn collect_and_sort_images(src_dir: &Path) -> Result<Vec<fs::DirEntry>> {
     Ok(files)
 }
 
+/// Writes a list of files into the provided ZIP writer.
 fn write_files_to_zip(
     zip: &mut zip::ZipWriter<fs::File>,
     files: &[fs::DirEntry],
@@ -411,6 +416,7 @@ fn write_files_to_zip(
     Ok(())
 }
 
+/// Verifies that the generated archive contains the expected number of files.
 fn verify_archive(archive_path: &Path, expected_count: usize) -> Result<()> {
     let file = fs::File::open(archive_path)?;
     let archive = zip::ZipArchive::new(file)?;

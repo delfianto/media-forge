@@ -1,3 +1,9 @@
+//! Entry point for the media-forge CLI tool.
+//!
+//! Media-Forge provides high-performance batch media conversion capabilities,
+//! utilizing multi-threading for image processing and NVIDIA hardware acceleration
+//! for video encoding.
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use mimalloc::MiMalloc;
@@ -5,25 +11,23 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+/// Media-Forge: High-performance batch media conversion tool.
 #[derive(Parser)]
 #[command(name = "media-forge")]
 #[command(version)]
 #[command(author = "Media-Forge Contributors")]
 #[command(about = "High-performance batch media conversion tool")]
 #[command(
-    long_about = "Media-Forge is a CLI tool for batch media conversion on Linux.\n\n\
-    Features:\n  \
-    - Convert images to AVIF/WebP with configurable quality\n  \
-    - Encode videos to AV1 using NVIDIA CUDA acceleration\n  \
-    - Create CBZ comic book archives from image folders\n\n\
-    Use 'media-forge <command> --help' for detailed command information."
+    long_about = "Media-Forge is a CLI tool for batch media conversion on Linux.\n\n    Features:\n  \n  - Convert images to AVIF/WebP with configurable quality\n  \n  - Encode videos to AV1 using NVIDIA CUDA acceleration\n  \n  - Create CBZ comic book archives from image folders\n\n    Use 'media-forge <command> --help' for detailed command information."
 )]
 #[command(propagate_version = true)]
 struct Cli {
+    /// Command to execute.
     #[command(subcommand)]
     command: Commands,
 }
 
+/// Supported subcommands for media processing.
 #[derive(Subcommand)]
 enum Commands {
     /// Convert images to modern formats (AVIF, WebP)
@@ -37,7 +41,7 @@ enum Commands {
     /// Create CBZ comic book archives from image folders
     ///
     /// Scans directories for image folders and creates properly formatted
-    /// CBZ archives with automatic page numbering and natural sorting.
+    /// CBZ archives with natural sorting.
     /// Supports dry-run mode to preview operations before execution.
     #[command(name = "archive", alias = "arch", visible_alias = "arch")]
     Archive(mf_archive::ArchiveArgs),
@@ -52,7 +56,6 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    // Set up Ctrl-C handler to kill child processes and shutdown gracefully
     ctrlc::set_handler(move || {
         eprintln!("\n\x1b[31m[Interrupt] Shutting down and cleaning up child processes...\x1b[0m");
         mf_core::ProcessManager::kill_all();
