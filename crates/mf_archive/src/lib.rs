@@ -110,8 +110,26 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
         .transpose()?;
 
     // Discover image folders to archive
-    println!("Scanning '{:?}' for image folders...", source_path);
-    let tasks = collect_archive_tasks(&source_path, &dest_path, args.recursive)?;
+    println!("Scanning {} for image folders...", source_path.display());
+    let pb_scan = ProgressBar::new_spinner();
+    pb_scan.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg} {pos} items found")
+            .unwrap(),
+    );
+    pb_scan.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    let mut items_found = 0;
+    let tasks = collect_archive_tasks(&source_path, &dest_path, args.recursive, |path| {
+        items_found += 1;
+        pb_scan.set_position(items_found);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+        pb_scan.set_message(format!("Scanning: {}", name));
+    })?;
+    pb_scan.finish_and_clear();
 
     if tasks.is_empty() {
         println!("No folders found to archive.");
@@ -135,23 +153,39 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn collect_archive_tasks(
+fn collect_archive_tasks<F>(
     source_root: &Path,
     dest_root: &Option<PathBuf>,
     recursive: bool,
-) -> Result<Vec<ArchiveTask>> {
+    mut callback: F,
+) -> Result<Vec<ArchiveTask>>
+where
+    F: FnMut(&Path),
+{
     let mut tasks = Vec::new();
-    find_image_folders(source_root, source_root, dest_root, recursive, &mut tasks)?;
+    find_image_folders(
+        source_root,
+        source_root,
+        dest_root,
+        recursive,
+        &mut tasks,
+        &mut callback,
+    )?;
     Ok(tasks)
 }
 
-fn find_image_folders(
+fn find_image_folders<F>(
     current: &Path,
     source_root: &Path,
     dest_root: &Option<PathBuf>,
     recursive: bool,
     tasks: &mut Vec<ArchiveTask>,
-) -> Result<()> {
+    callback: &mut F,
+) -> Result<()>
+where
+    F: FnMut(&Path),
+{
+    callback(current);
     let mut has_images = false;
     let mut entries = Vec::new();
 
@@ -202,7 +236,7 @@ fn find_image_folders(
     }
 
     for dir in entries {
-        find_image_folders(&dir, source_root, dest_root, recursive, tasks)?;
+        find_image_folders(&dir, source_root, dest_root, recursive, tasks, callback)?;
     }
 
     Ok(())
@@ -357,25 +391,17 @@ fn collect_and_sort_images(src_dir: &Path) -> Result<Vec<fs::DirEntry>> {
     Ok(files)
 }
 
-fn generate_archive_filename(index: usize, total: usize, extension: &str) -> String {
-    if index == 0 {
-        format!("000_cover.{}", extension)
-    } else if index == total - 1 {
-        format!("999_back.{}", extension)
-    } else {
-        format!("page_{:03}.{}", index, extension)
-    }
-}
-
 fn write_files_to_zip(
     zip: &mut zip::ZipWriter<fs::File>,
     files: &[fs::DirEntry],
     options: SimpleFileOptions,
 ) -> Result<()> {
-    for (i, entry) in files.iter().enumerate() {
+    for entry in files {
         let path = entry.path();
-        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        let arc_name = generate_archive_filename(i, files.len(), ext);
+        let arc_name = path
+            .file_name()
+            .ok_or_else(|| ArchiveError::InvalidFilename(path.clone()))?
+            .to_string_lossy();
 
         zip.start_file(arc_name, options)?;
         let content = fs::read(&path)?;

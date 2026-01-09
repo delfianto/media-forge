@@ -4,7 +4,7 @@ members = [
     "crates/mf_image",
     "crates/mf_archive",
     "crates/mf_video",
-    "crates/media_forge",
+    "crates/mf_main",
 ]
 resolver = "2"
 

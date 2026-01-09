@@ -1,7 +1,11 @@
 [package]
-name = "media-forge"
+name = "mf_main"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "media-forge"
+path = "src/main.rs"
 
 [dependencies]
 mf_image = { path = "../mf_image" }

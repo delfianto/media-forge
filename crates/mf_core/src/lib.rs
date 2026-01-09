@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// Supported image file extensions for conversion.
-pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "tiff", "bmp"];
+pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "tiff", "bmp", "avif"];
 
 /// Supported video file extensions for encoding.
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v"];
@@ -43,12 +43,21 @@ impl Scanner {
         Self { max_depth }
     }
 
-    /// Scans a directory for supported media files.
-    pub fn scan(&self, root: &Path) -> Vec<PathBuf> {
+    /// Scans a directory for supported media files with a progress callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - The root directory to start scanning from.
+    /// * `callback` - A function called for each directory/file visited, useful for progress reporting.
+    pub fn scan_with_callback<F>(&self, root: &Path, mut callback: F) -> Vec<PathBuf>
+    where
+        F: FnMut(&Path),
+    {
         WalkDir::new(root)
             .max_depth(self.max_depth)
             .into_iter()
             .filter_map(|e| e.ok())
+            .inspect(|e| callback(e.path()))
             .filter(|e| e.file_type().is_file())
             .map(|e| e.path().to_path_buf())
             .filter(|p| {
@@ -65,6 +74,11 @@ impl Scanner {
                 }
             })
             .collect()
+    }
+
+    /// Scans a directory for supported media files.
+    pub fn scan(&self, root: &Path) -> Vec<PathBuf> {
+        self.scan_with_callback(root, |_| {})
     }
 }
 

@@ -47,69 +47,37 @@ pub enum ImageError {
 pub type Result<T> = std::result::Result<T, ImageError>;
 
 /// Command-line arguments for image conversion.
-///
-/// Converts images to modern compression formats (AVIF, WebP) with configurable
-/// quality and speed settings. Supports both direct image files and images
-/// inside ZIP/CBZ archives.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct ImageArgs {
     /// Output directory for converted images
-    ///
-    /// Converted images will be saved here, preserving the original
-    /// directory structure relative to the source path.
     #[arg(value_name = "DEST")]
     pub destination: PathBuf,
 
     /// Source directory containing images to convert
-    ///
-    /// Scans this directory for supported image formats (JPG, PNG, WebP,
-    /// TIFF, BMP) and archives (ZIP, CBZ) containing images.
     #[arg(short, long, default_value = ".", value_name = "DIR")]
     pub source: PathBuf,
 
     /// Output image format
-    ///
-    /// AVIF: Better compression, slower encoding, wider HDR support
-    /// WebP: Faster encoding, broader browser compatibility
     #[arg(short, long, default_value = "avif", value_parser = ["avif", "webp"], value_name = "FMT")]
     pub format: String,
 
     /// Compression quality level (0-100)
-    ///
-    /// Higher values produce better visual quality but larger files.
-    /// Recommended: 70-85 for general use, 85-95 for photography.
-    /// Default of 72 provides good balance for most content.
     #[arg(short, long, default_value_t = 72, value_name = "0-100")]
     pub quality: u8,
 
     /// AVIF encoding speed (0-10)
-    ///
-    /// Lower values produce smaller files but take longer to encode.
-    /// 0-2: Best compression, very slow (archival)
-    /// 3-5: Good compression, moderate speed (recommended)
-    /// 6-10: Fast encoding, larger files (previews)
-    /// Only affects AVIF format; ignored for WebP.
     #[arg(long, default_value_t = 4, value_name = "0-10")]
     pub speed: u8,
 
     /// Maximum directory recursion depth
-    ///
-    /// How many levels of subdirectories to scan for images.
-    /// Use higher values for deeply nested folder structures.
     #[arg(long, default_value_t = 2, value_name = "N")]
     pub depth: usize,
 
     /// Number of parallel processing threads
-    ///
-    /// Defaults to 75% of available CPU cores for optimal performance.
-    /// Maximum allowed is 150% of cores. Reduce if memory-constrained.
     #[arg(short, long, value_name = "N")]
     pub jobs: Option<usize>,
 
     /// Disable preservation of original modification times
-    ///
-    /// By default, converted images retain the modification time of
-    /// their source files. Use this flag to set current time instead.
     #[arg(long)]
     pub no_mtime: bool,
 }
@@ -161,12 +129,32 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     };
 
     // Collect tasks
-    println!("Scanning '{:?}'...", source_path);
+    println!("Scanning {}...", source_path.display());
+    let pb_scan = ProgressBar::new_spinner();
+    pb_scan.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg} {pos} items found")
+            .unwrap(),
+    );
+    pb_scan.enable_steady_tick(std::time::Duration::from_millis(100));
+
     let scanner = Scanner::new(args.depth);
-    let files = scanner.scan(&source_path);
+    let mut files_found = 0;
+    let files = scanner.scan_with_callback(&source_path, |path| {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+        if path.is_file() {
+            files_found += 1;
+            pb_scan.set_position(files_found);
+        }
+        pb_scan.set_message(format!("Scanning: {}", name));
+    });
+    pb_scan.finish_and_clear();
 
     let (tasks_by_container, total_files) =
-        collect_tasks(files, &source_path, &dest_path, &args.format)?;
+        collect_tasks(files, &source_path, &dest_path, &args.format, num_threads)?;
 
     if tasks_by_container.is_empty() {
         println!("No images or archives found to process.");
@@ -194,54 +182,131 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Collects conversion tasks by scanning files and archives.
+/// Collects conversion tasks by scanning files and archives in parallel.
 fn collect_tasks(
     files: Vec<PathBuf>,
     source_path: &Path,
     dest_path: &Path,
     format: &str,
+    num_threads: usize,
 ) -> Result<(HashMap<String, Vec<Task>>, usize)> {
-    let mut tasks_by_container: HashMap<String, Vec<Task>> = HashMap::new();
-    let mut total_files = 0;
+    let mp = MultiProgress::new();
 
-    for file in files {
-        let ext = file
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
+    let mut analysis_spinners = Vec::new();
+    for _ in 0..num_threads.min(8) {
+        // Limit spinners to avoid screen flooding
+        let pb = mp.insert(0, ProgressBar::new_spinner());
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.blue} Analyzing: {msg}")
+                .unwrap(),
+        );
+        pb.set_message("Idle");
+        analysis_spinners.push(pb);
+    }
+    let spinner_pool = Arc::new(Mutex::new(analysis_spinners));
 
-        if ARCHIVE_EXTENSIONS.contains(&ext.as_str()) {
-            let count = collect_archive_tasks(
-                &file,
-                source_path,
-                dest_path,
-                format,
-                &mut tasks_by_container,
-            )?;
-            total_files += count;
-        } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-            let rel_path = file.strip_prefix(source_path).unwrap_or(&file);
-            let target_file = dest_path.join(rel_path).with_extension(format);
+    let pb_total = mp.add(ProgressBar::new(files.len() as u64));
+    pb_total.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} Total Analysis: [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .unwrap(),
+    );
 
-            let parent_folder = rel_path
-                .parent()
-                .unwrap_or(Path::new("root"))
-                .to_string_lossy()
-                .to_string();
+    let total_files_counter = std::sync::atomic::AtomicUsize::new(0);
 
-            tasks_by_container
-                .entry(parent_folder)
-                .or_default()
-                .push(Task {
-                    src_path: file,
+    let all_tasks: Vec<Task> = files
+        .par_iter()
+        .map(|file| {
+            let name = file
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+
+            let pb_opt = {
+                let mut pool = spinner_pool.lock().unwrap();
+                pool.pop()
+            };
+
+            let ext = file
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+
+            let tasks = if ARCHIVE_EXTENSIONS.contains(&ext.as_str()) {
+                if let Some(ref pb) = pb_opt {
+                    pb.set_message(name.to_string());
+                    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+                }
+
+                let t =
+                    collect_archive_tasks(file, source_path, dest_path, format).unwrap_or_default();
+
+                if let Some(ref pb) = pb_opt {
+                    pb.set_message("Idle");
+                    pb.disable_steady_tick();
+                }
+                t
+            } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+                let rel_path = file.strip_prefix(source_path).unwrap_or(file);
+                let target_file = dest_path.join(rel_path).with_extension(format);
+
+                vec![Task {
+                    src_path: file.clone(),
                     dest_path: target_file,
                     task_type: TaskType::File,
-                });
-            total_files += 1;
+                }]
+            } else {
+                Vec::new()
+            };
+
+            if let Some(pb) = pb_opt {
+                spinner_pool.lock().unwrap().push(pb);
+            }
+
+            total_files_counter.fetch_add(tasks.len(), std::sync::atomic::Ordering::SeqCst);
+            pb_total.inc(1);
+            tasks
+        })
+        .flatten()
+        .collect();
+
+    {
+        let pool = spinner_pool.lock().unwrap();
+        for pb in pool.iter() {
+            pb.finish_and_clear();
+            mp.remove(pb);
         }
     }
 
+    pb_total.finish_and_clear();
+
+    let mut tasks_by_container: HashMap<String, Vec<Task>> = HashMap::new();
+    for task in all_tasks {
+        let container_name = match &task.task_type {
+            TaskType::File => task
+                .src_path
+                .strip_prefix(source_path)
+                .unwrap_or(&task.src_path)
+                .parent()
+                .unwrap_or(Path::new("root"))
+                .to_string_lossy()
+                .to_string(),
+            TaskType::Archive { .. } => task
+                .src_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown_archive".to_string()),
+        };
+
+        tasks_by_container
+            .entry(container_name)
+            .or_default()
+            .push(task);
+    }
+
+    let total_files = total_files_counter.load(std::sync::atomic::Ordering::SeqCst);
     Ok((tasks_by_container, total_files))
 }
 
@@ -251,9 +316,9 @@ fn collect_archive_tasks(
     source_path: &Path,
     dest_path: &Path,
     format: &str,
-    tasks_by_container: &mut HashMap<String, Vec<Task>>,
-) -> Result<usize> {
-    let mut count = 0;
+) -> Result<Vec<Task>> {
+    let mut tasks = Vec::new();
+
     let zip_file = fs::File::open(archive_path)?;
     let mut archive = zip::ZipArchive::new(zip_file)?;
 
@@ -263,12 +328,6 @@ fn collect_archive_tasks(
     let parent = rel_path.parent().unwrap_or(Path::new(""));
     let stem = archive_path.file_stem().unwrap_or_default();
     let cbz_dest_folder = dest_path.join(parent).join(stem);
-
-    let container_name = archive_path
-        .file_name()
-        .ok_or_else(|| ImageError::InvalidFilename(archive_path.to_path_buf()))?
-        .to_string_lossy()
-        .to_string();
 
     for i in 0..archive.len() {
         let a_file = archive.by_index(i)?;
@@ -282,22 +341,18 @@ fn collect_archive_tasks(
             if IMAGE_EXTENSIONS.contains(&a_ext.as_str()) {
                 let target_file = cbz_dest_folder.join(a_file.name()).with_extension(format);
 
-                tasks_by_container
-                    .entry(container_name.clone())
-                    .or_default()
-                    .push(Task {
-                        src_path: archive_path.to_path_buf(),
-                        dest_path: target_file,
-                        task_type: TaskType::Archive {
-                            internal_path: a_file.name().to_string(),
-                        },
-                    });
-                count += 1;
+                tasks.push(Task {
+                    src_path: archive_path.to_path_buf(),
+                    dest_path: target_file,
+                    task_type: TaskType::Archive {
+                        internal_path: a_file.name().to_string(),
+                    },
+                });
             }
         }
     }
 
-    Ok(count)
+    Ok(tasks)
 }
 
 /// Executes conversion tasks with progress tracking.
