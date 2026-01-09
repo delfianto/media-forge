@@ -8,28 +8,54 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zip::write::SimpleFileOptions;
 
+/// Command-line arguments for archive creation.
+///
+/// Creates CBZ (Comic Book ZIP) archives from folders containing images.
+/// Archives are formatted for optimal compatibility with comic readers,
+/// with automatic page numbering and natural file sorting.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct ArchiveArgs {
-    /// Destination directory (optional)
+    /// Output directory for CBZ archives
+    ///
+    /// If not specified, archives are created alongside source folders.
+    /// Directory structure is preserved relative to the source path.
+    #[arg(value_name = "DEST")]
     pub destination: Option<PathBuf>,
 
-    /// Source directory containing folders
-    #[arg(short, long, default_value = ".")]
+    /// Source directory to scan for image folders
+    ///
+    /// Searches for folders containing image files (JPG, PNG, WebP, etc.).
+    /// Each qualifying folder becomes a separate CBZ archive.
+    #[arg(short, long, default_value = ".", value_name = "DIR")]
     pub source: PathBuf,
 
-    /// Number of threads
-    #[arg(short, long)]
+    /// Number of parallel processing threads
+    ///
+    /// Defaults to 75% of available CPU cores. Higher values can
+    /// improve throughput but may increase I/O contention.
+    #[arg(short, long, value_name = "N")]
     pub jobs: Option<usize>,
 
-    /// Scan subdirectories deeply
-    #[arg(long)]
+    /// Recursively scan for image folders in subdirectories
+    ///
+    /// Without this flag, only immediate subdirectories are considered.
+    /// Enable to process deeply nested folder structures.
+    #[arg(long, short = 'r')]
     pub recursive: bool,
 
-    /// DELETE source folders after successful archiving
+    /// Delete source folders after successful archiving
+    ///
+    /// WARNING: This permanently removes the original image folders
+    /// after verifying the archive was created correctly. Use with
+    /// --dry-run first to preview which folders will be deleted.
     #[arg(long)]
     pub cleanup: bool,
 
-    /// Show simulation of tasks
+    /// Preview operations without making changes
+    ///
+    /// Shows what archives would be created and which folders would
+    /// be affected, without actually creating any files or deleting
+    /// any folders. Recommended before using --cleanup.
     #[arg(short = 'n', long)]
     pub dry_run: bool,
 }

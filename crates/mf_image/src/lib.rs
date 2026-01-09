@@ -10,36 +10,70 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// Command-line arguments for image conversion.
+///
+/// Converts images to modern compression formats (AVIF, WebP) with configurable
+/// quality and speed settings. Supports both direct image files and images
+/// inside ZIP/CBZ archives.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct ImageArgs {
-    /// Destination directory
+    /// Output directory for converted images
+    ///
+    /// Converted images will be saved here, preserving the original
+    /// directory structure relative to the source path.
+    #[arg(value_name = "DEST")]
     pub destination: PathBuf,
 
-    /// Source directory
-    #[arg(short, long, default_value = ".")]
+    /// Source directory containing images to convert
+    ///
+    /// Scans this directory for supported image formats (JPG, PNG, WebP,
+    /// TIFF, BMP) and archives (ZIP, CBZ) containing images.
+    #[arg(short, long, default_value = ".", value_name = "DIR")]
     pub source: PathBuf,
 
-    /// Output format
-    #[arg(short, long, default_value = "avif", value_parser = ["avif", "webp"])]
+    /// Output image format
+    ///
+    /// AVIF: Better compression, slower encoding, wider HDR support
+    /// WebP: Faster encoding, broader browser compatibility
+    #[arg(short, long, default_value = "avif", value_parser = ["avif", "webp"], value_name = "FMT")]
     pub format: String,
 
-    /// Compression quality 0-100
-    #[arg(short, long, default_value_t = 72)]
+    /// Compression quality level (0-100)
+    ///
+    /// Higher values produce better visual quality but larger files.
+    /// Recommended: 70-85 for general use, 85-95 for photography.
+    /// Default of 72 provides good balance for most content.
+    #[arg(short, long, default_value_t = 72, value_name = "0-100")]
     pub quality: u8,
 
-    /// AVIF Speed 0-10 (Lower is slower/smaller)
-    #[arg(long, default_value_t = 4)]
+    /// AVIF encoding speed (0-10)
+    ///
+    /// Lower values produce smaller files but take longer to encode.
+    /// 0-2: Best compression, very slow (archival)
+    /// 3-5: Good compression, moderate speed (recommended)
+    /// 6-10: Fast encoding, larger files (previews)
+    /// Only affects AVIF format; ignored for WebP.
+    #[arg(long, default_value_t = 4, value_name = "0-10")]
     pub speed: u8,
 
-    /// Folder recursion depth
-    #[arg(long, default_value_t = 2)]
+    /// Maximum directory recursion depth
+    ///
+    /// How many levels of subdirectories to scan for images.
+    /// Use higher values for deeply nested folder structures.
+    #[arg(long, default_value_t = 2, value_name = "N")]
     pub depth: usize,
 
-    /// Number of threads (Defaults to 75% of cores. Max 1.5x cores)
-    #[arg(short, long)]
+    /// Number of parallel processing threads
+    ///
+    /// Defaults to 75% of available CPU cores for optimal performance.
+    /// Maximum allowed is 150% of cores. Reduce if memory-constrained.
+    #[arg(short, long, value_name = "N")]
     pub jobs: Option<usize>,
 
-    /// Do not preserve original file modification times
+    /// Disable preservation of original modification times
+    ///
+    /// By default, converted images retain the modification time of
+    /// their source files. Use this flag to set current time instead.
     #[arg(long)]
     pub no_mtime: bool,
 }

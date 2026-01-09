@@ -3,7 +3,18 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "media-forge")]
-#[command(about = "Unified Media Forge CLI", long_about = None)]
+#[command(version)]
+#[command(author = "Media-Forge Contributors")]
+#[command(about = "High-performance batch media conversion tool")]
+#[command(
+    long_about = "Media-Forge is a CLI tool for batch media conversion on Linux.\n\n\
+    Features:\n  \
+    - Convert images to AVIF/WebP with configurable quality\n  \
+    - Encode videos to AV1 using NVIDIA CUDA acceleration\n  \
+    - Create CBZ comic book archives from image folders\n\n\
+    Use 'media-forge <command> --help' for detailed command information."
+)]
+#[command(propagate_version = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -11,16 +22,28 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Image processing (AVIF, WEBP)
-    #[command(name = "image", alias = "img")]
+    /// Convert images to modern formats (AVIF, WebP)
+    ///
+    /// Batch convert images with configurable quality and compression speed.
+    /// Supports direct files and images inside ZIP/CBZ archives.
+    /// Preserves directory structure and original modification times.
+    #[command(name = "image", alias = "img", visible_alias = "img")]
     Image(mf_image::ImageArgs),
 
-    /// Archive processing (CBZ)
-    #[command(name = "archive", alias = "arch")]
+    /// Create CBZ comic book archives from image folders
+    ///
+    /// Scans directories for image folders and creates properly formatted
+    /// CBZ archives with automatic page numbering and natural sorting.
+    /// Supports dry-run mode to preview operations before execution.
+    #[command(name = "archive", alias = "arch", visible_alias = "arch")]
     Archive(mf_archive::ArchiveArgs),
 
-    /// Video processing (AV1)
-    #[command(name = "video", alias = "vid")]
+    /// Encode videos to AV1 using NVIDIA hardware acceleration
+    ///
+    /// Uses FFmpeg with NVIDIA NVENC for hardware-accelerated AV1 encoding.
+    /// Requires an NVIDIA GPU with NVENC support (GTX 10-series or newer).
+    /// Automatically skips videos already encoded in AV1.
+    #[command(name = "video", alias = "vid", visible_alias = "vid")]
     Video(mf_video::VideoArgs),
 }
 
