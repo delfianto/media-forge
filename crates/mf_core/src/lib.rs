@@ -43,11 +43,13 @@ pub struct CpuControl;
 impl CpuControl {
     pub fn get_thread_count(requested: Option<usize>) -> usize {
         let total_cpus = num_cpus::get();
-        let default_threads = total_cpus / 2;
-        let max_safe = (total_cpus as f64 * 0.75).ceil() as usize;
+        let default_threads = (total_cpus as f64 * 0.75).ceil() as usize;
+        let max_limit = (total_cpus as f64 * 1.5).ceil() as usize;
 
-        let threads = requested.unwrap_or(default_threads);
-        threads.clamp(1, max_safe)
+        match requested {
+            Some(req) => req.clamp(1, max_limit),
+            None => default_threads.clamp(1, max_limit),
+        }
     }
 }
 

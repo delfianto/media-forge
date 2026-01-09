@@ -190,7 +190,6 @@ fn create_cbz(task: &ArchiveTask, args: &ArchiveArgs) -> Result<()> {
         })
         .collect();
 
-    // Natural sort
     files.sort_by(|a, b| {
         natord::compare(
             &a.file_name().to_string_lossy(),
@@ -222,7 +221,6 @@ fn create_cbz(task: &ArchiveTask, args: &ArchiveArgs) -> Result<()> {
 
     zip.finish()?;
 
-    // Verify
     {
         let file = fs::File::open(&task.dest_cbz)?;
         let archive = zip::ZipArchive::new(file)?;
