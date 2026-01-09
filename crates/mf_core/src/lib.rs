@@ -215,7 +215,10 @@ mod tests {
     #[test]
     fn test_truncate_from_start() {
         assert_eq!(Naming::truncate_from_start("🦀🦀🦀🦀🦀", 4), "...🦀");
-        assert_eq!(Naming::truncate_from_start("long_filename.txt", 10), "...ame.txt");
+        assert_eq!(
+            Naming::truncate_from_start("long_filename.txt", 10),
+            "...ame.txt"
+        );
     }
 
     #[test]
