@@ -2,7 +2,6 @@
 members = [
     "crates/mf_core",
     "crates/mf_image",
-    "crates/mf_archive",
     "crates/mf_video",
     "crates/mf_main",
 ]

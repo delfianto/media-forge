@@ -913,21 +913,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
-name = "mf_archive"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "indicatif",
- "mf_core",
- "natord",
- "rayon",
- "thiserror",
- "walkdir",
- "zip",
-]
-
-[[package]]
 name = "mf_core"
 version = "0.1.0"
 dependencies = [
@@ -948,6 +933,7 @@ dependencies = [
  "image",
  "indicatif",
  "mf_core",
+ "natord",
  "ravif",
  "rayon",
  "thiserror",
@@ -961,7 +947,6 @@ dependencies = [
  "anyhow",
  "clap",
  "ctrlc",
- "mf_archive",
  "mf_core",
  "mf_image",
  "mf_video",

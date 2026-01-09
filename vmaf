@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    sys.exit("Error: tqdm not installed. Run: pip install tqdm")
+
+
+def get_video_duration(video_path):
+    """Get video duration in seconds using ffprobe."""
+    cmd = [
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_format",
+        str(video_path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        data = json.loads(result.stdout)
+        return float(data["format"].get("duration", 0))
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return None
+
+
+def run_vmaf(
+    encoded,
+    original,
+    output_json=None,
+    duration=None,
+    start_time=0,
+    threads=0,
+    subsample=1,
+    scale=None,
+):
+    """Run VMAF analysis using ffmpeg with progress bar."""
+
+    # Build scaling filter if requested
+    scale_filter = ""
+    if scale:
+        scale_filter = f"scale=-2:{scale},"
+
+    # Build VMAF filter with options
+    vmaf_options = []
+    if threads > 0:
+        vmaf_options.append(f"n_threads={threads}")
+    if subsample > 1:
+        vmaf_options.append(f"n_subsample={subsample}")
+
+    vmaf_params = f"={':'.join(vmaf_options)}" if vmaf_options else ""
+
+    if output_json:
+        sep = ":" if vmaf_options else "="
+        vmaf_params += f"{sep}log_fmt=json:log_path={output_json}"
+
+    # Build filter chain
+    vmaf_filter = (
+        f"[0:v]{scale_filter}setpts=PTS-STARTPTS[dist];"
+        f"[1:v]{scale_filter}setpts=PTS-STARTPTS[ref];"
+        f"[dist][ref]libvmaf{vmaf_params}"
+    )
+
+    cmd = ["ffmpeg", "-hide_banner"]
+
+    # Add start time if specified
+    if start_time > 0:
+        cmd.extend(["-ss", str(start_time)])
+
+    # Add duration limit if specified
+    if duration:
+        cmd.extend(["-t", str(duration)])
+
+    cmd.extend(
+        ["-i", encoded, "-i", original, "-lavfi", vmaf_filter, "-f", "null", "-"]
+    )
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+        if process.stdout is None:
+            process.kill()
+            sys.exit("Error: Failed to initialize ffmpeg process")
+
+        # Determine total duration for progress bar
+        total_duration = duration if duration else 0
+
+        # Create progress bar
+        with tqdm(
+            total=total_duration,
+            unit="sec",
+            desc="VMAF Progress",
+            bar_format="{l_bar}{bar}| {n:.1f}/{total:.1f}s [{elapsed}<{remaining}]",
+        ) as pbar:
+            output_lines = []
+            for line in process.stdout:
+                output_lines.append(line)
+
+                # Parse progress from ffmpeg output
+                if "time=" in line:
+                    try:
+                        time_str = line.split("time=")[1].split()[0]
+                        h, m, s = time_str.split(":")
+                        current_seconds = int(h) * 3600 + int(m) * 60 + float(s)
+
+                        if total_duration > 0:
+                            pbar.n = min(current_seconds, total_duration)
+                            pbar.refresh()
+                    except (ValueError, IndexError):
+                        pass
+
+        # Show post-processing message
+        print(
+            "Computing final VMAF scores (this can take a minute)...",
+            end="",
+            flush=True,
+        )
+
+        process.wait()
+
+        print(" Done!")
+
+        if process.returncode != 0:
+            sys.exit(f"Error: ffmpeg exited with code {process.returncode}")
+
+        return "".join(output_lines)
+
+    except FileNotFoundError:
+        sys.exit("Error: ffmpeg not found. Please install ffmpeg.")
+
+
+def parse_vmaf(output):
+    """Extract VMAF scores from ffmpeg output."""
+    pattern = r"VMAF score.*?mean:\s*([\d.]+).*?min:\s*([\d.]+).*?max:\s*([\d.]+)"
+    match = re.search(pattern, output, re.DOTALL)
+
+    if not match:
+        return None
+
+    return {
+        "mean": float(match.group(1)),
+        "min": float(match.group(2)),
+        "max": float(match.group(3)),
+    }
+
+
+def get_rating(score):
+    """Get quality rating and color for VMAF score."""
+    if score >= 95:
+        return "Excellent", "\033[92m"  # Green
+    elif score >= 90:
+        return "Very Good", "\033[92m"  # Green
+    elif score >= 80:
+        return "Good", "\033[93m"  # Yellow
+    elif score >= 70:
+        return "Fair", "\033[93m"  # Yellow
+    else:
+        return "Poor", "\033[91m"  # Red
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Compare video quality using VMAF")
+    parser.add_argument("original", help="Original reference video")
+    parser.add_argument("encoded", help="Encoded video file")
+    parser.add_argument("-o", "--output", help="Save detailed JSON results")
+    parser.add_argument(
+        "-d",
+        "--duration",
+        type=int,
+        default=600,
+        help="Duration to analyze in seconds (default: 600 = 10 minutes)",
+    )
+    parser.add_argument(
+        "-s",
+        "--start",
+        type=int,
+        default=300,
+        help="Start time in seconds (default: 300)",
+    )
+    parser.add_argument(
+        "--full", action="store_true", help="Analyze entire video (ignores --duration)"
+    )
+    parser.add_argument(
+        "-t",
+        "--threads",
+        type=int,
+        default=0,
+        help="Number of threads for VMAF (0=auto, default: 0)",
+    )
+    parser.add_argument(
+        "--subsample",
+        type=int,
+        default=1,
+        help="Analyze every Nth frame (1=all frames, 2=every 2nd, etc. default: 1)",
+    )
+    parser.add_argument(
+        "--scale",
+        type=int,
+        choices=[1080, 720, 480],
+        help="Downscale to height for faster analysis (e.g., 1080 for 1080p)",
+    )
+    args = parser.parse_args()
+
+    # Validate files
+    for file in [args.encoded, args.original]:
+        if not Path(file).exists():
+            sys.exit(f"Error: File not found: {file}")
+
+    # Auto-detect CPU threads if set to 0
+    if args.threads == 0:
+        cpu_count = os.cpu_count() or 4
+        threads = max(1, cpu_count - 2)  # Leave 2 cores for system
+    else:
+        threads = args.threads
+
+    # Determine analysis duration
+    if args.full:
+        # Get actual video duration for progress bar
+        video_duration = get_video_duration(args.encoded)
+        if video_duration is None:
+            print(
+                "Warning: Could not determine video duration, progress bar may be inaccurate"
+            )
+            duration = None
+        else:
+            duration = video_duration
+    else:
+        duration = args.duration
+
+    # Format time display
+    def format_time(seconds):
+        mins, secs = divmod(seconds, 60)
+        hours, mins = divmod(mins, 60)
+        if hours > 0:
+            return f"{int(hours)}h {int(mins)}m {int(secs)}s"
+        elif mins > 0:
+            return f"{int(mins)}m {int(secs)}s"
+        else:
+            return f"{int(secs)}s"
+
+    # Display analysis info
+    print(f"\n{'=' * 50}")
+    print(f"Original: {args.original}")
+    print(f"Encoded:  {args.encoded}")
+
+    if args.full:
+        if duration:
+            print(f"Analysis: Full video ({format_time(duration)})")
+        else:
+            print("Analysis: Full video")
+    else:
+        end_time = args.start + args.duration
+        print(
+            f"Analysis: {format_time(args.start)} → {format_time(end_time)} ({format_time(args.duration)})"
+        )
+
+    # Display optimizations
+    optimizations = []
+    if threads > 1:
+        optimizations.append(f"{threads} threads")
+    if args.subsample > 1:
+        optimizations.append(f"every {args.subsample}th frame")
+    if args.scale:
+        optimizations.append(f"scaled to {args.scale}p")
+
+    if optimizations:
+        print(f"Options:  {', '.join(optimizations)}")
+
+    print(f"{'=' * 50}\n")
+
+    output = run_vmaf(
+        args.encoded,
+        args.original,
+        args.output,
+        duration,
+        args.start,
+        threads,
+        args.subsample,
+        args.scale,
+    )
+    scores = parse_vmaf(output)
+
+    if not scores:
+        sys.exit("Error: Could not parse VMAF scores from output")
+
+    # Display results
+    rating, color = get_rating(scores["mean"])
+    reset = "\033[0m"
+
+    print(f"\n{'=' * 50}")
+    print("VMAF Scores:")
+    print(f"  Mean:  {color}{scores['mean']:.2f}{reset} ({rating})")
+    print(f"  Min:   {scores['min']:.2f}")
+    print(f"  Max:   {scores['max']:.2f}")
+
+    if args.output:
+        print(f"\n✓ Detailed results saved to: {args.output}")
+
+    print(f"{'=' * 50}\n")
+
+
+if __name__ == "__main__":
+    main()
