@@ -1,5 +1,5 @@
+use crate::{Naming, ProcessManager, SHUTDOWN, Scanner, VIDEO_EXTENSIONS};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use mf_core::{Naming, ProcessManager, SHUTDOWN, Scanner, VIDEO_EXTENSIONS};
 use rayon::prelude::*;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::{FFMPEG_PROGRESS_RE, Result, VideoArgs, VideoError, get_video_metadata};
+use crate::video::{FFMPEG_PROGRESS_RE, Result, VideoArgs, VideoError, get_video_metadata};
 
 /// Represents a single video encoding task.
 #[derive(Debug, Clone)]

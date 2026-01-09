@@ -5,6 +5,9 @@
 //! - CPU thread count management with sensible defaults
 //! - Filename utilities for display and cover image detection
 
+pub mod image;
+pub mod video;
+
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
