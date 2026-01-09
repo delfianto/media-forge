@@ -1,5 +1,5 @@
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use mf_core::{ProcessManager, SHUTDOWN, Scanner, VIDEO_EXTENSIONS};
+use mf_core::{Naming, ProcessManager, SHUTDOWN, Scanner, VIDEO_EXTENSIONS};
 use rayon::prelude::*;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -201,11 +201,7 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
-            let name_display = if name.len() > 50 {
-                format!("...{}", &name[name.len().saturating_sub(47)..])
-            } else {
-                name
-            };
+            let name_display = Naming::truncate_from_start(&name, 50);
 
             pb_file.set_message(name_display);
 
