@@ -177,33 +177,37 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
             .join(&args.destination)
     };
 
-    println!("Scanning {}...", source_path.display());
-    let pb_scan = ProgressBar::new_spinner();
-    pb_scan.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg} {pos} items found")
-            .unwrap(),
-    );
-    pb_scan.enable_steady_tick(std::time::Duration::from_millis(100));
-
     let scanner = Scanner::new(args.depth);
-    let mut files_found = 0;
-    let files = scanner.scan_with_callback(&source_path, |path| {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-        if path.is_file() {
-            files_found += 1;
-            pb_scan.set_position(files_found);
-        }
-        pb_scan.set_message(format!("Scanning: {}", name));
-    });
-    pb_scan.finish_and_clear();
+    let files = if source_path.is_file() {
+        vec![source_path.clone()]
+    } else {
+        println!("Scanning {}...", source_path.display());
+        let pb_scan = ProgressBar::new_spinner();
+        pb_scan.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg} {pos} items found")
+                .unwrap(),
+        );
+        pb_scan.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let mut files_found = 0;
+        let f = scanner.scan_with_callback(&source_path, |path| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            if path.is_file() {
+                files_found += 1;
+                pb_scan.set_position(files_found);
+            }
+            pb_scan.set_message(format!("Scanning: {}", name));
+        });
+        pb_scan.finish_and_clear();
+        f
+    };
 
     let (tasks_by_container, total_files) =
         collect_tasks(files, &source_path, &dest_path, &args.format, num_threads)?;
-
     if tasks_by_container.is_empty() {
         println!("No images or archives found to process.");
         return Ok(());
@@ -300,8 +304,18 @@ fn collect_tasks(
                 }
                 t
             } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-                let rel_path = file.strip_prefix(source_path).unwrap_or(file);
-                let target_file = dest_path.join(rel_path).with_extension(format);
+                let target_file = if source_path.is_file() {
+                    if dest_path.extension().is_some() {
+                        dest_path.to_path_buf()
+                    } else {
+                        dest_path
+                            .join(file.file_name().unwrap())
+                            .with_extension(format)
+                    }
+                } else {
+                    let rel_path = file.strip_prefix(source_path).unwrap_or(file);
+                    dest_path.join(rel_path).with_extension(format)
+                };
 
                 vec![Task {
                     src_path: file.clone(),

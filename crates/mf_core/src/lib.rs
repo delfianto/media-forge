@@ -186,4 +186,17 @@ mod tests {
         assert!(Naming::is_cover_image("Folder.jpg"));
         assert!(!Naming::is_cover_image("page_005.jpg"));
     }
+
+    #[test]
+    fn test_scanner_single_file() {
+        use std::fs::File;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("test.mp4");
+        File::create(&file_path).unwrap();
+
+        let scanner = Scanner::new(1);
+        let files = scanner.scan(&file_path);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0], file_path.canonicalize().unwrap_or(file_path));
+    }
 }

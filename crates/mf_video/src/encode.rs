@@ -14,11 +14,8 @@ use crate::{FFMPEG_PROGRESS_RE, Result, VideoArgs, VideoError, get_video_metadat
 /// Represents a single video encoding task.
 #[derive(Debug, Clone)]
 pub struct VideoTask {
-    /// Source video file path.
     pub src: PathBuf,
-    /// Destination video file path.
     pub dest: PathBuf,
-    /// Duration of the video in seconds for progress tracking.
     pub duration: f64,
 }
 
@@ -37,27 +34,32 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
             .join(&args.destination)
     };
 
-    println!("Scanning {} for videos...", source_path.display());
-    let pb_scan_dir = ProgressBar::new_spinner();
-    pb_scan_dir.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg} {pos} items found")
-            .unwrap(),
-    );
-    pb_scan_dir.enable_steady_tick(std::time::Duration::from_millis(100));
-
-    let mut items_found = 0;
     let scanner = Scanner::new(args.depth);
-    let files = scanner.scan_with_callback(&source_path, |path| {
-        items_found += 1;
-        pb_scan_dir.set_position(items_found);
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-        pb_scan_dir.set_message(format!("Scanning: {}", name));
-    });
-    pb_scan_dir.finish_and_clear();
+    let files = if source_path.is_file() {
+        vec![source_path.clone()]
+    } else {
+        println!("Scanning {} for videos...", source_path.display());
+        let pb_scan_dir = ProgressBar::new_spinner();
+        pb_scan_dir.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg} {pos} items found")
+                .unwrap(),
+        );
+        pb_scan_dir.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let mut items_found = 0;
+        let f = scanner.scan_with_callback(&source_path, |path| {
+            items_found += 1;
+            pb_scan_dir.set_position(items_found);
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            pb_scan_dir.set_message(format!("Scanning: {}", name));
+        });
+        pb_scan_dir.finish_and_clear();
+        f
+    };
 
     let tasks = collect_video_tasks(files, &source_path, &dest_path, &args)?;
 
@@ -71,7 +73,6 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Verifies that ffmpeg and ffprobe are available for encoding.
 fn check_encoding_requirements() -> Result<()> {
     if Command::new("ffprobe")
         .arg("-version")
@@ -94,7 +95,6 @@ fn check_encoding_requirements() -> Result<()> {
     Ok(())
 }
 
-/// Collects video encoding tasks in parallel.
 fn collect_video_tasks(
     files: Vec<PathBuf>,
     source_path: &Path,
@@ -132,8 +132,18 @@ fn collect_video_tasks(
                 && meta.codec != "av1"
                 && meta.duration > 0.0
             {
-                let rel_path = file.strip_prefix(source_path).unwrap_or(file);
-                let dest_file = dest_path.join(rel_path).with_extension(&args.ext);
+                let dest_file = if source_path.is_file() {
+                    if dest_path.extension().is_some() {
+                        dest_path.to_path_buf()
+                    } else {
+                        dest_path
+                            .join(file.file_name().unwrap())
+                            .with_extension(&args.ext)
+                    }
+                } else {
+                    let rel_path = file.strip_prefix(source_path).unwrap_or(file);
+                    dest_path.join(rel_path).with_extension(&args.ext)
+                };
 
                 if !dest_file.exists()
                     && let Ok(mut tasks) = tasks_mutex.lock()
@@ -158,7 +168,6 @@ fn collect_video_tasks(
     Ok(tasks)
 }
 
-/// Executes encoding tasks with controlled concurrency.
 fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     let mp = MultiProgress::new();
     let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
@@ -215,7 +224,6 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     Ok(())
 }
 
-/// Encodes a single video file using FFmpeg.
 fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result<()> {
     if let Some(parent) = task.dest.parent() {
         fs::create_dir_all(parent)?;

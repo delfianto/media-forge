@@ -68,7 +68,7 @@ pub static FFMPEG_PROGRESS_RE: Lazy<Regex> = Lazy::new(|| {
 
 /// Cached regex for parsing VMAF scores from FFmpeg output.
 pub static VMAF_SCORE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"VMAF score.*?mean:\s*([\d.]+).*?min:\s*([\d.]+).*?max:\s*([\d.]+)")
+    Regex::new(r"(?i)VMAF score:\s*([\d.]+)|mean:\s*([\d.]+).*?min:\s*([\d.]+).*?max:\s*([\d.]+)")
         .expect("VMAF score regex is hardcoded and should always compile")
 });
 
@@ -119,11 +119,11 @@ pub struct QualityArgs {
     #[arg(short, long, value_name = "FILE")]
     pub output: Option<PathBuf>,
 
-    /// Duration to analyze in seconds
-    #[arg(short, long, value_name = "SECONDS")]
-    pub duration: Option<u64>,
+    /// Duration to analyze in seconds (default: 60s = 1m)
+    #[arg(short, long, default_value_t = 60, value_name = "SECONDS")]
+    pub duration: u64,
 
-    /// Start time for analysis in seconds
+    /// Start time for analysis in seconds (default: 0)
     #[arg(short, long, default_value_t = 0, value_name = "SECONDS")]
     pub start: u64,
 
@@ -139,9 +139,9 @@ pub struct QualityArgs {
     #[arg(long, default_value_t = 1, value_name = "N")]
     pub subsample: usize,
 
-    /// Downscale to height for faster analysis (e.g., 1080, 720)
-    #[arg(long, value_parser = ["480", "720", "1080"], value_name = "HEIGHT")]
-    pub scale: Option<String>,
+    /// Downscale to height for faster analysis (default: 1080)
+    #[arg(long, default_value = "1080", value_parser = ["480", "720", "1080"], value_name = "HEIGHT")]
+    pub scale: String,
 }
 
 /// Minimal video metadata required for task planning.
@@ -150,6 +150,10 @@ pub struct VideoMeta {
     pub duration: f64,
     /// Name of the video codec (e.g., "h264", "av1").
     pub codec: String,
+    /// Video width in pixels.
+    pub width: u32,
+    /// Video height in pixels.
+    pub height: u32,
 }
 
 /// Retrieves video metadata using ffprobe.
@@ -192,13 +196,23 @@ pub fn get_video_metadata(path: &Path) -> Result<VideoMeta> {
         .unwrap_or(0.0);
 
     let streams = json["streams"].as_array();
-    let codec = streams
-        .and_then(|arr| arr.iter().find(|s| s["codec_type"] == "video"))
+    let video_stream = streams.and_then(|arr| arr.iter().find(|s| s["codec_type"] == "video"));
+
+    let codec = video_stream
         .and_then(|s| s["codec_name"].as_str())
         .unwrap_or("unknown")
         .to_string();
 
-    Ok(VideoMeta { duration, codec })
+    let width = video_stream.and_then(|s| s["width"].as_u64()).unwrap_or(0) as u32;
+
+    let height = video_stream.and_then(|s| s["height"].as_u64()).unwrap_or(0) as u32;
+
+    Ok(VideoMeta {
+        duration,
+        codec,
+        width,
+        height,
+    })
 }
 
 /// Delegates video encoding to the internal module.
