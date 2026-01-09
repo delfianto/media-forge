@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use thiserror::Error;
 
-/// Image conversion errors with context-specific information.
+pub mod archive;
+
+/// Unified error type for all image and archive operations.
 #[derive(Error, Debug)]
 pub enum ImageError {
     #[error("Source path does not exist: {0:?}")]
@@ -19,6 +21,9 @@ pub enum ImageError {
 
     #[error("Invalid filename: path {0:?} has no filename component")]
     InvalidFilename(PathBuf),
+
+    #[error("Invalid filename: path {0:?} contains non-UTF8 characters")]
+    NonUtf8Filename(PathBuf),
 
     #[error("Failed to build thread pool: {0}")]
     ThreadPoolError(#[from] rayon::ThreadPoolBuildError),
@@ -43,6 +48,12 @@ pub enum ImageError {
 
     #[error("Could not determine current directory")]
     NoCurrentDir,
+
+    #[error("No image files found in {0:?}")]
+    NoImagesFound(PathBuf),
+
+    #[error("Archive verification failed for {0:?}. File count mismatch.")]
+    VerificationFailed(PathBuf),
 }
 
 pub type Result<T> = std::result::Result<T, ImageError>;
@@ -81,6 +92,38 @@ pub struct ImageArgs {
     /// Disable preservation of original modification times
     #[arg(long)]
     pub no_mtime: bool,
+}
+
+/// Command-line arguments for archive creation.
+#[derive(ClapArgs, Debug, Clone)]
+pub struct ArchiveArgs {
+    /// Output directory for CBZ archives
+    #[arg(value_name = "DEST")]
+    pub destination: Option<PathBuf>,
+
+    /// Source directory to scan for image folders
+    #[arg(short, long, default_value = ".", value_name = "DIR")]
+    pub source: PathBuf,
+
+    /// Number of parallel processing threads
+    #[arg(short, long, value_name = "N")]
+    pub jobs: Option<usize>,
+
+    /// Recursively scan for image folders in subdirectories
+    #[arg(long, short = 'r')]
+    pub recursive: bool,
+
+    /// Delete source folders after successful archiving
+    #[arg(long)]
+    pub cleanup: bool,
+
+    /// Preview operations without making changes
+    #[arg(short = 'n', long)]
+    pub dry_run: bool,
+
+    /// Force cleanup without confirmation prompt
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// Discriminates between direct file tasks and internal archive tasks.
@@ -186,9 +229,12 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Orchestrates the archive creation process.
+pub fn run_archive(args: ArchiveArgs) -> anyhow::Result<()> {
+    archive::run(args)
+}
+
 /// Collects conversion tasks by scanning files and archives in parallel.
-///
-/// Returns a map of tasks grouped by container name and the total task count.
 fn collect_tasks(
     files: Vec<PathBuf>,
     source_path: &Path,

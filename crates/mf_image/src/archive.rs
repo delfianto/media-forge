@@ -1,4 +1,3 @@
-use clap::Args as ClapArgs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use mf_core::{CpuControl, IMAGE_EXTENSIONS};
 use rayon::prelude::*;
@@ -6,76 +5,9 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use thiserror::Error;
 use zip::write::SimpleFileOptions;
 
-/// Archive creation errors with context-specific information.
-#[derive(Error, Debug)]
-pub enum ArchiveError {
-    #[error("No image files found in {0:?}")]
-    NoImagesFound(PathBuf),
-
-    #[error("Archive verification failed for {0:?}. File count mismatch.")]
-    VerificationFailed(PathBuf),
-
-    #[error("Invalid filename: path {0:?} has no filename component")]
-    InvalidFilename(PathBuf),
-
-    #[error("Invalid filename: path {0:?} contains non-UTF8 characters")]
-    NonUtf8Filename(PathBuf),
-
-    #[error("Could not determine current directory")]
-    NoCurrentDir,
-
-    #[error("Source path does not exist: {0:?}")]
-    SourceNotFound(PathBuf),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("ZIP error: {0}")]
-    Zip(#[from] zip::result::ZipError),
-
-    #[error("Failed to build thread pool: {0}")]
-    ThreadPoolError(#[from] rayon::ThreadPoolBuildError),
-
-    #[error("Template error: {0}")]
-    Template(#[from] indicatif::style::TemplateError),
-}
-
-pub type Result<T> = std::result::Result<T, ArchiveError>;
-
-/// Command-line arguments for archive creation.
-#[derive(ClapArgs, Debug, Clone)]
-pub struct ArchiveArgs {
-    /// Output directory for CBZ archives
-    #[arg(value_name = "DEST")]
-    pub destination: Option<PathBuf>,
-
-    /// Source directory to scan for image folders
-    #[arg(short, long, default_value = ".", value_name = "DIR")]
-    pub source: PathBuf,
-
-    /// Number of parallel processing threads
-    #[arg(short, long, value_name = "N")]
-    pub jobs: Option<usize>,
-
-    /// Recursively scan for image folders in subdirectories
-    #[arg(long, short = 'r')]
-    pub recursive: bool,
-
-    /// Delete source folders after successful archiving
-    #[arg(long)]
-    pub cleanup: bool,
-
-    /// Preview operations without making changes
-    #[arg(short = 'n', long)]
-    pub dry_run: bool,
-
-    /// Force cleanup without confirmation prompt
-    #[arg(long)]
-    pub force: bool,
-}
+use crate::{ArchiveArgs, ImageError, Result};
 
 /// Represents a single directory to be archived into a CBZ file.
 struct ArchiveTask {
@@ -85,16 +17,16 @@ struct ArchiveTask {
     dest_cbz: PathBuf,
 }
 
-/// Main entry point for archive creation.
+/// Main entry point for archive creation orchestration.
 pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
     let num_threads = CpuControl::get_thread_count(args.jobs);
     rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build_global()
-        .map_err(ArchiveError::from)?;
+        .map_err(ImageError::from)?;
 
     let source_path = fs::canonicalize(&args.source)
-        .map_err(|_| ArchiveError::SourceNotFound(args.source.clone()))?;
+        .map_err(|_| ImageError::SourceNotFound(args.source.clone()))?;
 
     let dest_path = args
         .destination
@@ -104,7 +36,7 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
                 Ok(d.clone())
             } else {
                 std::env::current_dir()
-                    .map_err(|_| ArchiveError::NoCurrentDir)
+                    .map_err(|_| ImageError::NoCurrentDir)
                     .map(|cwd| cwd.join(d))
             }
         })
@@ -221,10 +153,10 @@ where
 
         let filename = current
             .file_name()
-            .ok_or_else(|| ArchiveError::InvalidFilename(current.to_path_buf()))?;
+            .ok_or_else(|| ImageError::InvalidFilename(current.to_path_buf()))?;
         let filename_str = filename
             .to_str()
-            .ok_or_else(|| ArchiveError::NonUtf8Filename(current.to_path_buf()))?;
+            .ok_or_else(|| ImageError::NonUtf8Filename(current.to_path_buf()))?;
         let cbz_name = format!("{}.cbz", filename_str);
         let dest_cbz = dest_folder.join(cbz_name);
 
@@ -389,7 +321,7 @@ fn collect_and_sort_images(src_dir: &Path) -> Result<Vec<fs::DirEntry>> {
     });
 
     if files.is_empty() {
-        return Err(ArchiveError::NoImagesFound(src_dir.to_path_buf()));
+        return Err(ImageError::NoImagesFound(src_dir.to_path_buf()));
     }
 
     Ok(files)
@@ -405,7 +337,7 @@ fn write_files_to_zip(
         let path = entry.path();
         let arc_name = path
             .file_name()
-            .ok_or_else(|| ArchiveError::InvalidFilename(path.clone()))?
+            .ok_or_else(|| ImageError::InvalidFilename(path.clone()))?
             .to_string_lossy();
 
         zip.start_file(arc_name, options)?;
@@ -422,7 +354,7 @@ fn verify_archive(archive_path: &Path, expected_count: usize) -> Result<()> {
     let archive = zip::ZipArchive::new(file)?;
 
     if archive.len() != expected_count {
-        return Err(ArchiveError::VerificationFailed(archive_path.to_path_buf()));
+        return Err(ImageError::VerificationFailed(archive_path.to_path_buf()));
     }
 
     Ok(())

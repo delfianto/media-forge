@@ -44,7 +44,7 @@ enum Commands {
     /// CBZ archives with natural sorting.
     /// Supports dry-run mode to preview operations before execution.
     #[command(name = "archive", alias = "arch", visible_alias = "arch")]
-    Archive(mf_archive::ArchiveArgs),
+    Archive(mf_image::ArchiveArgs),
 
     /// Encode videos to AV1 using NVIDIA hardware acceleration
     ///
@@ -53,9 +53,18 @@ enum Commands {
     /// Automatically skips videos already encoded in AV1.
     #[command(name = "video", alias = "vid", visible_alias = "vid")]
     Video(mf_video::VideoArgs),
+
+    /// Compare video quality using VMAF
+    ///
+    /// Analyzes the quality of an encoded video compared to its original source.
+    /// Provides mean, min, and max VMAF scores with a quality rating.
+    /// Requires FFmpeg with libvmaf support.
+    #[command(name = "quality", alias = "vmaf", visible_alias = "vmaf")]
+    Quality(mf_video::QualityArgs),
 }
 
 fn main() -> Result<()> {
+    // Set up Ctrl-C handler to kill child processes and shutdown gracefully
     ctrlc::set_handler(move || {
         eprintln!("\n\x1b[31m[Interrupt] Shutting down and cleaning up child processes...\x1b[0m");
         mf_core::ProcessManager::kill_all();
@@ -67,7 +76,8 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Image(args) => mf_image::run(args),
-        Commands::Archive(args) => mf_archive::run(args),
+        Commands::Archive(args) => mf_image::run_archive(args),
         Commands::Video(args) => mf_video::run(args),
+        Commands::Quality(args) => mf_video::run_quality(args),
     }
 }
