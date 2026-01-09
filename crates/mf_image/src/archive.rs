@@ -42,26 +42,43 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
         })
         .transpose()?;
 
-    println!("Scanning {} for image folders...", source_path.display());
-    let pb_scan = ProgressBar::new_spinner();
-    pb_scan.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg} {pos} items found")
-            .unwrap(),
-    );
-    pb_scan.enable_steady_tick(std::time::Duration::from_millis(100));
-
     let mut items_found = 0;
-    let tasks = collect_archive_tasks(&source_path, &dest_path, args.recursive, |path| {
-        items_found += 1;
-        pb_scan.set_position(items_found);
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-        pb_scan.set_message(format!("Scanning: {}", name));
-    })?;
-    pb_scan.finish_and_clear();
+
+    let tasks = if source_path.is_file() || (!args.recursive && source_path.is_dir()) {
+        // Direct archiving of a single folder (non-recursive) or handling a single file
+        // find_image_folders will handle checking for images
+        let mut t = Vec::new();
+        find_image_folders(
+            &source_path,
+            &source_path,
+            &dest_path,
+            false,
+            &mut t,
+            &mut |_| {},
+        )?;
+        t
+    } else {
+        println!("Scanning {} for image folders...", source_path.display());
+        let pb_scan = ProgressBar::new_spinner();
+        pb_scan.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg} {pos} items found")
+                .unwrap(),
+        );
+        pb_scan.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let t = collect_archive_tasks(&source_path, &dest_path, args.recursive, |path| {
+            items_found += 1;
+            pb_scan.set_position(items_found);
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            pb_scan.set_message(format!("Scanning: {}", name));
+        })?;
+        pb_scan.finish_and_clear();
+        t
+    };
 
     if tasks.is_empty() {
         println!("No folders found to archive.");
