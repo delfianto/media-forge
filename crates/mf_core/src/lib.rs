@@ -4,20 +4,6 @@
 //! - File scanning with configurable depth and extension filtering
 //! - CPU thread count management with sensible defaults
 //! - Filename utilities for display and cover image detection
-//!
-//! # Example
-//!
-//! ```no_run
-//! use mf_core::{Scanner, CpuControl, IMAGE_EXTENSIONS};
-//! use std::path::Path;
-//!
-//! // Scan for media files
-//! let scanner = Scanner::new(3);
-//! let files = scanner.scan(Path::new("./media"));
-//!
-//! // Get optimal thread count
-//! let threads = CpuControl::get_thread_count(None);
-//! ```
 
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
@@ -41,30 +27,29 @@ pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v"]
 /// Registry for active child process PIDs.
 static ACTIVE_PROCESSES: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
+/// Manages external child processes to ensure they are cleaned up on exit.
 pub struct ProcessManager;
 
 impl ProcessManager {
-    /// Registers a child process PID.
+    /// Registers a child process PID for tracking.
     pub fn register(pid: u32) {
         if let Ok(mut pids) = ACTIVE_PROCESSES.lock() {
             pids.insert(pid);
         }
     }
 
-    /// Unregisters a child process PID.
+    /// Unregisters a child process PID once it has completed.
     pub fn unregister(pid: u32) {
         if let Ok(mut pids) = ACTIVE_PROCESSES.lock() {
             pids.remove(&pid);
         }
     }
 
-    /// Kills all registered child processes.
+    /// Kills all registered child processes and signals shutdown.
     pub fn kill_all() {
         SHUTDOWN.store(true, Ordering::SeqCst);
         if let Ok(mut pids) = ACTIVE_PROCESSES.lock() {
             for &pid in pids.iter() {
-                // On Linux, we can use the kill command or libc.
-                // For simplicity and safety, we spawn a kill command.
                 let _ = std::process::Command::new("kill")
                     .arg("-9")
                     .arg(pid.to_string())
@@ -75,6 +60,7 @@ impl ProcessManager {
     }
 }
 
+/// Recursively scans directories for supported media files.
 pub struct Scanner {
     /// Maximum recursion depth for directory traversal.
     pub max_depth: usize,
@@ -87,11 +73,6 @@ impl Scanner {
     }
 
     /// Scans a directory for supported media files with a progress callback.
-    ///
-    /// # Arguments
-    ///
-    /// * `root` - The root directory to start scanning from.
-    /// * `callback` - A function called for each directory/file visited, useful for progress reporting.
     pub fn scan_with_callback<F>(&self, root: &Path, mut callback: F) -> Vec<PathBuf>
     where
         F: FnMut(&Path),
@@ -130,6 +111,9 @@ pub struct CpuControl;
 
 impl CpuControl {
     /// Calculates the optimal thread count for parallel processing.
+    ///
+    /// Defaults to 75% of available cores if no specific count is requested.
+    /// Clamps the result between 1 and 150% of available cores.
     pub fn get_thread_count(requested: Option<usize>) -> usize {
         let total_cpus = num_cpus::get();
         let default_threads = (total_cpus as f64 * 0.75).ceil() as usize;
@@ -161,12 +145,10 @@ impl Naming {
     pub fn is_cover_image(filename: &str) -> bool {
         let lower = filename.to_lowercase();
 
-        // Explicit markers
         if lower.contains("cover") || lower.contains("folder") || lower.contains("front") {
             return true;
         }
 
-        // Common first page patterns
         if lower.starts_with("000") || lower.starts_with("001") || lower.starts_with("page_000") {
             return true;
         }
@@ -181,7 +163,6 @@ mod tests {
 
     #[test]
     fn test_truncate_unicode() {
-        // "🦀" is one character but 4 bytes
         assert_eq!(Naming::truncate_filename("🦀🦀🦀🦀🦀", 4), "🦀...");
     }
 

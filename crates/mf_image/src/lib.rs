@@ -83,16 +83,23 @@ pub struct ImageArgs {
     pub no_mtime: bool,
 }
 
+/// Discriminates between direct file tasks and internal archive tasks.
 #[derive(Clone, Debug)]
 enum TaskType {
+    /// Processing a standalone image file.
     File,
+    /// Processing an image file located within a ZIP/CBZ archive.
     Archive { internal_path: String },
 }
 
+/// Represents a single image conversion job.
 #[derive(Clone, Debug)]
 struct Task {
+    /// Path to the source file (or archive).
     src_path: PathBuf,
+    /// Target path for the converted image.
     dest_path: PathBuf,
+    /// Specification of the task origin.
     task_type: TaskType,
 }
 
@@ -104,7 +111,6 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
         );
     }
 
-    // Configure thread pool
     let num_threads = CpuControl::get_thread_count(args.jobs);
     rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
@@ -113,7 +119,6 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
 
     println!("Running with {} threads", num_threads);
 
-    // Resolve paths
     let source_path = fs::canonicalize(&args.source)
         .map_err(|e| ImageError::CanonicalizationError(args.source.clone(), e))?;
 
@@ -129,7 +134,6 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
             .join(&args.destination)
     };
 
-    // Collect tasks
     println!("Scanning {}...", source_path.display());
     let pb_scan = ProgressBar::new_spinner();
     pb_scan.set_style(
@@ -171,7 +175,6 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
         total_files
     );
 
-    // Execute tasks
     process_tasks(
         tasks_by_container,
         container_names,
@@ -184,6 +187,8 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
 }
 
 /// Collects conversion tasks by scanning files and archives in parallel.
+///
+/// Returns a map of tasks grouped by container name and the total task count.
 fn collect_tasks(
     files: Vec<PathBuf>,
     source_path: &Path,
@@ -195,7 +200,6 @@ fn collect_tasks(
 
     let mut analysis_spinners = Vec::new();
     for _ in 0..num_threads.min(8) {
-        // Limit spinners to avoid screen flooding
         let pb = mp.insert(0, ProgressBar::new_spinner());
         pb.set_style(
             ProgressStyle::default_spinner()
@@ -509,7 +513,7 @@ fn process_single_task(task: &Task, args: &ImageArgs) -> Result<()> {
     Ok(())
 }
 
-/// Encodes an image to AVIF format.
+/// Encodes an image to AVIF format with hardware-independent encoding.
 fn encode_avif(img: DynamicImage, dest: &Path, quality: u8, speed: u8) -> Result<()> {
     let (width, height) = img.dimensions();
     let img_rgba = img.to_rgba8();
