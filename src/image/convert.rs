@@ -1,8 +1,8 @@
-use image::{DynamicImage, GenericImageView, ImageFormat};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use mf_core::{
+use crate::{
     ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, Naming, SHUTDOWN, Scanner, VIDEO_EXTENSIONS,
 };
+use image::{DynamicImage, GenericImageView, ImageFormat};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::{ImageArgs, ImageError, Result, Task, TaskType};
+use crate::image::{ImageArgs, ImageError, Result, Task, TaskType};
 
 /// Orchestrates the image conversion process.
 pub fn run(args: ImageArgs) -> anyhow::Result<()> {

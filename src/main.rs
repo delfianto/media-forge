@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use media_forge::{ProcessManager, image, video};
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -36,7 +37,7 @@ enum Commands {
     /// Supports direct files and images inside ZIP/CBZ archives.
     /// Preserves directory structure and original modification times.
     #[command(name = "image", alias = "img", visible_alias = "img")]
-    Image(mf_image::ImageArgs),
+    Image(image::ImageArgs),
 
     /// Create CBZ comic book archives from image folders
     ///
@@ -44,7 +45,7 @@ enum Commands {
     /// CBZ archives with natural sorting.
     /// Supports dry-run mode to preview operations before execution.
     #[command(name = "archive", alias = "arch", visible_alias = "arch")]
-    Archive(mf_image::ArchiveArgs),
+    Archive(image::ArchiveArgs),
 
     /// Encode videos to AV1 using NVIDIA hardware acceleration
     ///
@@ -52,7 +53,7 @@ enum Commands {
     /// Requires an NVIDIA GPU with NVENC support (GTX 10-series or newer).
     /// Automatically skips videos already encoded in AV1.
     #[command(name = "video", alias = "vid", visible_alias = "vid")]
-    Video(mf_video::VideoArgs),
+    Video(video::VideoArgs),
 
     /// Compare video quality using VMAF
     ///
@@ -60,14 +61,14 @@ enum Commands {
     /// Provides mean, min, and max VMAF scores with a quality rating.
     /// Requires FFmpeg with libvmaf support.
     #[command(name = "quality", alias = "vmaf", visible_alias = "vmaf")]
-    Quality(mf_video::QualityArgs),
+    Quality(video::QualityArgs),
 }
 
 fn main() -> Result<()> {
     // Set up Ctrl-C handler to kill child processes and shutdown gracefully
     ctrlc::set_handler(move || {
         eprintln!("\n\x1b[31m[Interrupt] Shutting down and cleaning up child processes...\x1b[0m");
-        mf_core::ProcessManager::kill_all();
+        ProcessManager::kill_all();
         std::process::exit(130);
     })
     .expect("Error setting Ctrl-C handler");
@@ -75,9 +76,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Image(args) => mf_image::run(args),
-        Commands::Archive(args) => mf_image::run_archive(args),
-        Commands::Video(args) => mf_video::run(args),
-        Commands::Quality(args) => mf_video::run_quality(args),
+        Commands::Image(args) => image::run(args),
+        Commands::Archive(args) => image::run_archive(args),
+        Commands::Video(args) => video::run(args),
+        Commands::Quality(args) => video::run_quality(args),
     }
 }

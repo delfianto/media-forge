@@ -1,10 +1,10 @@
+use crate::{ProcessManager, SHUTDOWN};
 use indicatif::{ProgressBar, ProgressStyle};
-use mf_core::{ProcessManager, SHUTDOWN};
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
 
-use crate::{
+use crate::video::{
     FFMPEG_PROGRESS_RE, QualityArgs, Result, VMAF_SCORE_RE, VideoError, VideoMeta,
     get_video_metadata,
 };

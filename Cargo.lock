@@ -929,70 +929,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "memchr"
-version = "2.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
-
-[[package]]
-name = "mf_core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "num_cpus",
- "once_cell",
- "path-clean",
- "tempfile",
- "thiserror",
- "walkdir",
-]
-
-[[package]]
-name = "mf_image"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "image",
- "indicatif",
- "mf_core",
- "natord",
- "ravif",
- "rayon",
- "thiserror",
- "zip",
-]
-
-[[package]]
-name = "mf_main"
+name = "media-forge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "ctrlc",
- "mf_core",
- "mf_image",
- "mf_video",
- "mimalloc",
-]
-
-[[package]]
-name = "mf_video"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
+ "image",
  "indicatif",
- "mf_core",
+ "mimalloc",
+ "natord",
  "num_cpus",
  "once_cell",
+ "path-clean",
+ "ravif",
  "rayon",
  "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "walkdir",
+ "zip",
 ]
+
+[[package]]
+name = "memchr"
+version = "2.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
 name = "mimalloc"

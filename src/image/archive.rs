@@ -1,5 +1,5 @@
+use crate::{CpuControl, IMAGE_EXTENSIONS};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use mf_core::{CpuControl, IMAGE_EXTENSIONS};
 use rayon::prelude::*;
 use std::fs;
 use std::io::{self, Write};
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zip::write::SimpleFileOptions;
 
-use crate::{ArchiveArgs, ImageError, Result};
+use crate::image::{ArchiveArgs, ImageError, Result};
 
 /// Represents a single directory to be archived into a CBZ file.
 struct ArchiveTask {
