@@ -859,17 +859,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "media-forge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "mf_archive",
- "mf_image",
- "mf_video",
-]
-
-[[package]]
 name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -914,6 +903,17 @@ dependencies = [
  "rayon",
  "thiserror",
  "zip",
+]
+
+[[package]]
+name = "mf_main"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mf_archive",
+ "mf_image",
+ "mf_video",
 ]
 
 [[package]]

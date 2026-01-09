@@ -119,9 +119,27 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
             .join(&args.destination)
     };
 
-    println!("Scanning '{:?}' for videos...", source_path);
+    println!("Scanning {} for videos...", source_path.display());
+    let pb_scan_dir = ProgressBar::new_spinner();
+    pb_scan_dir.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg} {pos} items found")
+            .unwrap(),
+    );
+    pb_scan_dir.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    let mut items_found = 0;
     let scanner = Scanner::new(args.depth);
-    let files = scanner.scan(&source_path);
+    let files = scanner.scan_with_callback(&source_path, |path| {
+        items_found += 1;
+        pb_scan_dir.set_position(items_found);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+        pb_scan_dir.set_message(format!("Scanning: {}", name));
+    });
+    pb_scan_dir.finish_and_clear();
 
     // Discover tasks
     let tasks = collect_video_tasks(files, &source_path, &dest_path, &args)?;
