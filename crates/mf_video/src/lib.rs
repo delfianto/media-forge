@@ -1,7 +1,7 @@
-use anyhow::{Result, anyhow};
 use clap::Args as ClapArgs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use mf_core::{Scanner, VIDEO_EXTENSIONS};
+use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
@@ -10,67 +10,87 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use thiserror::Error;
+
+/// Video processing errors with context-specific information.
+#[derive(Error, Debug)]
+pub enum VideoError {
+    #[error("FFmpeg not found. Install FFmpeg with NVENC support (av1_nvenc codec)")]
+    FfmpegNotFound,
+
+    #[error("ffprobe not found. Install FFmpeg which includes ffprobe")]
+    FfprobeNotFound,
+
+    #[error("FFmpeg exited with code {code}. Stderr: {stderr}")]
+    FfmpegFailed { code: i32, stderr: String },
+
+    #[error("Failed to parse video metadata from {path:?}: {reason}")]
+    MetadataParseError { path: PathBuf, reason: String },
+
+    #[error("GPU encoding error: {0}. Try reducing --jobs or check GPU memory")]
+    GpuError(String),
+
+    #[error("Failed to capture FFmpeg output stream")]
+    ProcessOutputCaptureFailed,
+
+    #[error("Invalid path: contains non-UTF8 characters: {0:?}")]
+    InvalidPath(PathBuf),
+
+    #[error("Source path not found: {0:?}")]
+    SourceNotFound(PathBuf),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("JSON parsing error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("Thread pool error: {0}")]
+    ThreadPoolError(#[from] rayon::ThreadPoolBuildError),
+
+    #[error("Template error: {0}")]
+    Template(#[from] indicatif::style::TemplateError),
+
+    #[error("Could not determine current directory")]
+    NoCurrentDir,
+}
+
+pub type Result<T> = std::result::Result<T, VideoError>;
+
+/// Cached regex for parsing FFmpeg progress output.
+static FFMPEG_PROGRESS_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"time=(\d+):(\d+):(\d+\.\d+)")
+        .expect("FFmpeg progress regex is hardcoded and should always compile")
+});
 
 /// Command-line arguments for video encoding.
-///
-/// Encodes videos to AV1 format using NVIDIA NVENC hardware acceleration.
-/// Requires an NVIDIA GPU with NVENC support (GTX 10-series or newer)
-/// and FFmpeg compiled with NVENC support.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct VideoArgs {
     /// Output directory for encoded videos
-    ///
-    /// Encoded videos are saved here, preserving the original
-    /// directory structure relative to the source path.
     #[arg(value_name = "DEST")]
     pub destination: PathBuf,
 
     /// Source directory containing videos to encode
-    ///
-    /// Scans for supported video formats: MP4, MKV, MOV, AVI, TS, M4V.
-    /// Videos already encoded in AV1 are automatically skipped.
     #[arg(short, long, default_value = ".", value_name = "DIR")]
     pub source: PathBuf,
 
     /// Constant quality level (1-51)
-    ///
-    /// Lower values produce better quality but larger files.
-    /// 18-22: Very high quality (archival, visually lossless)
-    /// 23-28: High quality (recommended for general use)
-    /// 29-35: Medium quality (good for streaming)
-    /// 36+: Lower quality (maximum compression)
     #[arg(long, default_value_t = 28, value_name = "1-51")]
     pub cq: u8,
 
     /// NVIDIA NVENC encoding preset (p1-p7)
-    ///
-    /// Controls the speed/quality tradeoff of the encoder.
-    /// p1: Slowest, best quality (final renders)
-    /// p4: Balanced speed and quality
-    /// p6: Fast encoding, good quality (default)
-    /// p7: Fastest, lower quality (previews)
     #[arg(long, default_value = "p6", value_name = "PRESET")]
     pub preset: String,
 
     /// Number of concurrent encoding jobs
-    ///
-    /// Each encoding job uses significant GPU memory. Keep low (1-2)
-    /// to avoid GPU memory exhaustion. Increase only if your GPU
-    /// has sufficient VRAM for parallel encoding.
     #[arg(short, long, default_value_t = 1, value_name = "N")]
     pub jobs: usize,
 
     /// Output container format
-    ///
-    /// MKV: Better subtitle support, more flexible (recommended)
-    /// MP4: Wider compatibility, required for some devices
     #[arg(long, default_value = "mkv", value_parser = ["mkv", "mp4"], value_name = "FMT")]
     pub ext: String,
 
     /// Maximum directory recursion depth
-    ///
-    /// How many levels of subdirectories to scan for videos.
-    /// Use higher values for deeply nested folder structures.
     #[arg(long, default_value_t = 2, value_name = "N")]
     pub depth: usize,
 }
@@ -82,29 +102,83 @@ struct VideoTask {
     duration: f64,
 }
 
-pub fn run(args: VideoArgs) -> Result<()> {
-    let source_path = fs::canonicalize(&args.source)?;
+/// Main entry point for video encoding.
+pub fn run(args: VideoArgs) -> anyhow::Result<()> {
+    // Check requirements
+    check_requirements()?;
+
+    // Resolve paths
+    let source_path = fs::canonicalize(&args.source)
+        .map_err(|_| VideoError::SourceNotFound(args.source.clone()))?;
+
     let dest_path = if args.destination.is_absolute() {
         args.destination.clone()
     } else {
-        std::env::current_dir()?.join(&args.destination)
+        std::env::current_dir()
+            .map_err(|_| VideoError::NoCurrentDir)?
+            .join(&args.destination)
     };
 
     println!("Scanning '{:?}' for videos...", source_path);
     let scanner = Scanner::new(args.depth);
     let files = scanner.scan(&source_path);
 
+    // Discover tasks
+    let tasks = collect_video_tasks(files, &source_path, &dest_path, &args)?;
+
+    println!("Found {} videos to process.", tasks.len());
+    if tasks.is_empty() {
+        return Ok(());
+    }
+
+    // Execute tasks
+    process_video_tasks(tasks, args)?;
+
+    Ok(())
+}
+
+/// Verifies that ffmpeg and ffprobe are available.
+fn check_requirements() -> Result<()> {
+    if Command::new("ffprobe")
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_err()
+    {
+        return Err(VideoError::FfprobeNotFound);
+    }
+    if Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_err()
+    {
+        return Err(VideoError::FfmpegNotFound);
+    }
+    Ok(())
+}
+
+/// Collects video encoding tasks in parallel.
+fn collect_video_tasks(
+    files: Vec<PathBuf>,
+    source_path: &Path,
+    dest_path: &Path,
+    args: &VideoArgs,
+) -> Result<Vec<VideoTask>> {
     let tasks_mutex = Arc::new(Mutex::new(Vec::new()));
 
+    // Use a temporary thread pool for scanning to avoid interfering with global pool
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(args.jobs.max(4)) // Allow more threads for lightweight probing
+        .num_threads((num_cpus::get() / 2).max(4))
         .build()?;
 
     let pb_scan = ProgressBar::new(files.len() as u64);
     pb_scan.set_style(
         ProgressStyle::default_bar()
             .template("{spinner} Scanning {pos}/{len}")
-            .unwrap(),
+            .map_err(VideoError::from)?,
     );
 
     pool.install(|| {
@@ -114,16 +188,19 @@ pub fn run(args: VideoArgs) -> Result<()> {
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_lowercase())
                 .unwrap_or_default();
+
             if VIDEO_EXTENSIONS.contains(&ext.as_str())
                 && let Ok(meta) = get_video_metadata(file)
                 && meta.codec != "av1"
                 && meta.duration > 0.0
             {
-                let rel_path = file.strip_prefix(&source_path).unwrap();
+                let rel_path = file.strip_prefix(source_path).unwrap_or(file);
                 let dest_file = dest_path.join(rel_path).with_extension(&args.ext);
 
-                if !dest_file.exists() {
-                    tasks_mutex.lock().unwrap().push(VideoTask {
+                if !dest_file.exists()
+                    && let Ok(mut tasks) = tasks_mutex.lock()
+                {
+                    tasks.push(VideoTask {
                         src: file.clone(),
                         dest: dest_file,
                         duration: meta.duration,
@@ -135,23 +212,26 @@ pub fn run(args: VideoArgs) -> Result<()> {
     });
     pb_scan.finish_and_clear();
 
-    let tasks = Arc::try_unwrap(tasks_mutex).unwrap().into_inner().unwrap();
-    println!("Found {} videos to process.", tasks.len());
+    let tasks = Arc::try_unwrap(tasks_mutex)
+        .map_err(|_| VideoError::GpuError("Failed to unwrap task list".into()))?
+        .into_inner()
+        .map_err(|_| VideoError::GpuError("Failed to unlock task list".into()))?;
 
-    if tasks.is_empty() {
-        return Ok(());
-    }
+    Ok(tasks)
+}
 
+/// Executes video encoding tasks with progress tracking.
+fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     let mp = MultiProgress::new();
     let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
     pb_main.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}").unwrap()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")?
             .progress_chars("#>-"),
     );
     pb_main.set_message("Total Video Progress");
 
-    // Processing pool with limited concurrency (heavy GPU usage)
+    // Re-configure global thread pool for limited concurrency (heavy GPU usage)
     let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(args.jobs)
         .build_global();
@@ -166,10 +246,12 @@ pub fn run(args: VideoArgs) -> Result<()> {
                 .template("{msg} {bar:20} {percent}%")
                 .unwrap(),
         );
-        pb_file.set_message(format!(
-            "{}",
-            task.src.file_name().unwrap().to_string_lossy()
-        ));
+        pb_file.set_message(
+            task.src
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
 
         if let Err(e) = convert_video(task, &args, &pb_file) {
             eprintln!("Error converting {:?}: {}", task.src, e);
@@ -189,6 +271,10 @@ struct VideoMeta {
 }
 
 fn get_video_metadata(path: &Path) -> Result<VideoMeta> {
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| VideoError::InvalidPath(path.to_path_buf()))?;
+
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -197,11 +283,25 @@ fn get_video_metadata(path: &Path) -> Result<VideoMeta> {
             "json",
             "-show_format",
             "-show_streams",
-            path.to_str().unwrap(),
+            path_str,
         ])
         .output()?;
 
-    let json: Value = serde_json::from_slice(&output.stdout)?;
+    if !output.status.success() {
+        return Err(VideoError::MetadataParseError {
+            path: path.to_path_buf(),
+            reason: format!(
+                "ffprobe failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+
+    let json: Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| VideoError::MetadataParseError {
+            path: path.to_path_buf(),
+            reason: format!("Invalid JSON: {}", e),
+        })?;
 
     let duration = json["format"]["duration"]
         .as_str()
@@ -223,6 +323,15 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
         fs::create_dir_all(parent)?;
     }
 
+    let src_str = task
+        .src
+        .to_str()
+        .ok_or_else(|| VideoError::InvalidPath(task.src.clone()))?;
+    let dest_str = task
+        .dest
+        .to_str()
+        .ok_or_else(|| VideoError::InvalidPath(task.dest.clone()))?;
+
     let mut cmd = Command::new("ffmpeg");
     cmd.args([
         "-y",
@@ -234,7 +343,7 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
         "-hwaccel_output_format",
         "cuda",
         "-i",
-        task.src.to_str().unwrap(),
+        src_str,
         "-c:v",
         "av1_nvenc",
         "-preset",
@@ -253,7 +362,7 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
         cmd.args(["-c:s", "copy"]);
     }
 
-    cmd.arg(task.dest.to_str().unwrap());
+    cmd.arg(dest_str);
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -263,13 +372,11 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
     let stderr = child
         .stderr
         .take()
-        .ok_or(anyhow!("Failed to capture stderr"))?;
+        .ok_or(VideoError::ProcessOutputCaptureFailed)?;
     let reader = BufReader::new(stderr);
 
-    let re = Regex::new(r"time=(\d+):(\d+):(\d+\.\d+)").unwrap();
-
-    for line in reader.lines().map_while(Result::ok) {
-        if let Some(caps) = re.captures(&line) {
+    for line in reader.lines().map_while(std::result::Result::ok) {
+        if let Some(caps) = FFMPEG_PROGRESS_RE.captures(&line) {
             let h: u64 = caps[1].parse().unwrap_or(0);
             let m: u64 = caps[2].parse().unwrap_or(0);
             let s: f64 = caps[3].parse().unwrap_or(0.0);
@@ -280,7 +387,10 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
 
     let status = child.wait()?;
     if !status.success() {
-        return Err(anyhow!("ffmpeg exited with {}", status));
+        return Err(VideoError::FfmpegFailed {
+            code: status.code().unwrap_or(-1),
+            stderr: "Check ffmpeg logs for details".to_string(),
+        });
     }
 
     if let Ok(meta) = fs::metadata(&task.src)
