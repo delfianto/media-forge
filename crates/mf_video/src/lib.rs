@@ -11,33 +11,67 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+/// Command-line arguments for video encoding.
+///
+/// Encodes videos to AV1 format using NVIDIA NVENC hardware acceleration.
+/// Requires an NVIDIA GPU with NVENC support (GTX 10-series or newer)
+/// and FFmpeg compiled with NVENC support.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct VideoArgs {
-    /// Destination directory
+    /// Output directory for encoded videos
+    ///
+    /// Encoded videos are saved here, preserving the original
+    /// directory structure relative to the source path.
+    #[arg(value_name = "DEST")]
     pub destination: PathBuf,
 
-    /// Source directory
-    #[arg(short, long, default_value = ".")]
+    /// Source directory containing videos to encode
+    ///
+    /// Scans for supported video formats: MP4, MKV, MOV, AVI, TS, M4V.
+    /// Videos already encoded in AV1 are automatically skipped.
+    #[arg(short, long, default_value = ".", value_name = "DIR")]
     pub source: PathBuf,
 
-    /// Constant Quality (1-51). Lower=Better
-    #[arg(long, default_value_t = 28)]
+    /// Constant quality level (1-51)
+    ///
+    /// Lower values produce better quality but larger files.
+    /// 18-22: Very high quality (archival, visually lossless)
+    /// 23-28: High quality (recommended for general use)
+    /// 29-35: Medium quality (good for streaming)
+    /// 36+: Lower quality (maximum compression)
+    #[arg(long, default_value_t = 28, value_name = "1-51")]
     pub cq: u8,
 
-    /// NVENC Preset (p1-p7)
-    #[arg(long, default_value = "p6")]
+    /// NVIDIA NVENC encoding preset (p1-p7)
+    ///
+    /// Controls the speed/quality tradeoff of the encoder.
+    /// p1: Slowest, best quality (final renders)
+    /// p4: Balanced speed and quality
+    /// p6: Fast encoding, good quality (default)
+    /// p7: Fastest, lower quality (previews)
+    #[arg(long, default_value = "p6", value_name = "PRESET")]
     pub preset: String,
 
-    /// Concurrent Files
-    #[arg(short, long, default_value_t = 1)]
+    /// Number of concurrent encoding jobs
+    ///
+    /// Each encoding job uses significant GPU memory. Keep low (1-2)
+    /// to avoid GPU memory exhaustion. Increase only if your GPU
+    /// has sufficient VRAM for parallel encoding.
+    #[arg(short, long, default_value_t = 1, value_name = "N")]
     pub jobs: usize,
 
     /// Output container format
-    #[arg(long, default_value = "mkv", value_parser = ["mkv", "mp4"])]
+    ///
+    /// MKV: Better subtitle support, more flexible (recommended)
+    /// MP4: Wider compatibility, required for some devices
+    #[arg(long, default_value = "mkv", value_parser = ["mkv", "mp4"], value_name = "FMT")]
     pub ext: String,
 
-    /// Folder recursion depth
-    #[arg(long, default_value_t = 2)]
+    /// Maximum directory recursion depth
+    ///
+    /// How many levels of subdirectories to scan for videos.
+    /// Use higher values for deeply nested folder structures.
+    #[arg(long, default_value_t = 2, value_name = "N")]
     pub depth: usize,
 }
 
