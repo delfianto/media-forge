@@ -2,6 +2,8 @@
 
 set shell := ["zsh", "-c"]
 
+export RUSTFLAGS := "-C target-cpu=native"
+
 default: build
 
 # Build the release binary
