@@ -450,14 +450,430 @@ let rgba_pixels = unsafe {
 
 ## Remaining Refactoring Targets
 
-### Priority 1: Remaining Unsafe Code
+### Summary Table
 
-| Location | Pattern | Risk | Suggested Fix |
-|----------|---------|------|---------------|
-| `image/convert.rs:579-581` | `unsafe { std::slice::from_raw_parts(...) }` | MEDIUM | Use safe `bytemuck` or `rgb` crate |
-| `image/report.rs:76` | `.expect("Reporter already finished")` | MEDIUM | Return `Option` or `Result` |
-| `image/report.rs:324` | `file_name().unwrap()` | LOW | Use `unwrap_or_default()` |
-| `video/encode.rs:116` | `file_name().unwrap()` | LOW | Use `unwrap_or_default()` |
+| ID | Location | Pattern | Risk | Effort | Status |
+|----|----------|---------|------|--------|--------|
+| R1 | `image/convert.rs:579-581` | `unsafe { std::slice::from_raw_parts(...) }` | MEDIUM | Medium | Pending |
+| R2 | `image/report.rs:76` | `.expect("Reporter already finished")` | MEDIUM | Low | Pending |
+| R3 | `image/report.rs:324` | `file_name().unwrap()` | LOW | Trivial | Pending |
+| R4 | `video/encode.rs:116` | `file_name().unwrap()` | LOW | Trivial | Pending |
+
+---
+
+## Detailed Refactoring Plan
+
+### R1: Remove Unsafe Pointer Cast in AVIF Encoding
+
+**File**: `src/image/convert.rs`
+**Lines**: 579-581
+**Risk**: MEDIUM
+**Effort**: Medium (requires dependency addition)
+
+#### Current Code
+```rust
+let pixels = img_rgba.as_raw();
+let rgba_pixels = unsafe {
+    std::slice::from_raw_parts(pixels.as_ptr() as *const ravif::RGBA8, pixels.len() / 4)
+};
+```
+
+#### Problem Analysis
+- Uses `unsafe` to reinterpret `&[u8]` as `&[ravif::RGBA8]`
+- Assumes memory layout compatibility between `u8` array and `RGBA8` struct
+- Risk: If `ravif::RGBA8` has different alignment or padding, this causes UB
+- The cast `pixels.len() / 4` assumes exactly 4 bytes per pixel (RGBA)
+
+#### Solution Options
+
+**Option A: Use `bytemuck` crate (Recommended)**
+
+1. Add dependency to `Cargo.toml`:
+```toml
+[dependencies]
+bytemuck = { version = "1.14", features = ["derive"] }
+```
+
+2. Verify `ravif::RGBA8` is `bytemuck`-compatible (check if it's `#[repr(C)]`):
+```rust
+// If ravif::RGBA8 is already Pod-compatible:
+use bytemuck::cast_slice;
+
+let pixels = img_rgba.as_raw();
+let rgba_pixels: &[ravif::RGBA8] = cast_slice(pixels);
+```
+
+3. If `ravif::RGBA8` is not `Pod`, create a wrapper:
+```rust
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Rgba8 {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+// Then cast and convert
+let rgba_pixels: &[Rgba8] = bytemuck::cast_slice(pixels);
+// Map to ravif::RGBA8 if needed
+```
+
+**Option B: Use `rgb` crate**
+
+1. The `image` crate already uses `rgb` internally. Check if we can use:
+```rust
+use rgb::FromSlice;
+
+let pixels = img_rgba.as_raw();
+let rgba_pixels = pixels.as_rgba();  // Returns &[RGBA<u8>]
+```
+
+2. Verify compatibility with `ravif::Img::new()` expectations.
+
+**Option C: Safe Manual Conversion (No new deps, slower)**
+
+```rust
+let pixels = img_rgba.as_raw();
+let rgba_pixels: Vec<ravif::RGBA8> = pixels
+    .chunks_exact(4)
+    .map(|chunk| ravif::RGBA8 {
+        r: chunk[0],
+        g: chunk[1],
+        b: chunk[2],
+        a: chunk[3],
+    })
+    .collect();
+
+let img_ravif = ravif::Img::new(&rgba_pixels, width as usize, height as usize);
+```
+
+#### Recommended Implementation
+
+```rust
+/// Encodes an image to AVIF format with hardware-independent encoding.
+fn encode_avif(img: &DynamicImage, dest: &Path, quality: u8, speed: u8) -> Result<()> {
+    let (width, height) = img.dimensions();
+    let img_rgba = img.to_rgba8();
+
+    let enc = ravif::Encoder::new()
+        .with_quality(quality as f32)
+        .with_speed(speed);
+
+    let pixels = img_rgba.as_raw();
+
+    // SAFETY FIX: Use bytemuck for safe type punning
+    // Verify at compile time that the types are compatible
+    let rgba_pixels: &[ravif::RGBA8] = bytemuck::cast_slice(pixels);
+
+    let img_ravif = ravif::Img::new(rgba_pixels, width as usize, height as usize);
+    let out = enc
+        .encode_rgba(img_ravif)
+        .map_err(|e| ImageError::AvifEncoding(e.to_string()))?;
+
+    fs::write(dest, out.avif_file)?;
+    Ok(())
+}
+```
+
+#### Testing Requirements
+1. Verify existing image conversion tests still pass
+2. Test with various image dimensions (odd sizes, 1x1, large images)
+3. Test with images that have alpha channel variations
+4. Benchmark to ensure no performance regression
+
+#### Verification Checklist
+- [ ] Add `bytemuck` to `Cargo.toml`
+- [ ] Verify `ravif::RGBA8` layout compatibility
+- [ ] Remove `unsafe` block
+- [ ] Run `cargo test`
+- [ ] Run `cargo clippy` - no new warnings
+- [ ] Test manual AVIF conversion with sample images
+
+---
+
+### R2: Fix Reporter `.expect()` Call
+
+**File**: `src/image/report.rs`
+**Lines**: 76
+**Risk**: MEDIUM
+**Effort**: Low
+
+#### Current Code
+```rust
+/// Returns a clone of the sender for worker threads.
+pub fn sender(&self) -> Sender<ReportRecord> {
+    self.tx.as_ref().expect("Reporter already finished").clone()
+}
+```
+
+#### Problem Analysis
+- Panics if called after `finish()` has been called
+- The `finish()` method takes `self` by value, so this *should* be unreachable
+- However, the API allows for misuse if someone clones the Reporter or uses unsafe
+- Better to return `Option` or `Result` for defensive programming
+
+#### Solution Options
+
+**Option A: Return `Option<Sender<ReportRecord>>` (Recommended)**
+
+```rust
+/// Returns a clone of the sender for worker threads.
+///
+/// Returns `None` if the reporter has already been finished.
+pub fn sender(&self) -> Option<Sender<ReportRecord>> {
+    self.tx.as_ref().cloned()
+}
+```
+
+Update call sites:
+```rust
+// In generate_conversion_report():
+let sender = reporter.sender().ok_or_else(|| {
+    anyhow::anyhow!("Reporter was unexpectedly finished")
+})?;
+```
+
+**Option B: Return `Result<Sender<ReportRecord>, ReportError>`**
+
+1. Add error variant to `ImageError`:
+```rust
+#[derive(Error, Debug)]
+pub enum ImageError {
+    // ... existing variants ...
+
+    #[error("Reporter has already been finished")]
+    ReporterFinished,
+}
+```
+
+2. Update method:
+```rust
+pub fn sender(&self) -> Result<Sender<ReportRecord>, ImageError> {
+    self.tx
+        .as_ref()
+        .cloned()
+        .ok_or(ImageError::ReporterFinished)
+}
+```
+
+**Option C: Debug Assert (Minimal change)**
+
+```rust
+pub fn sender(&self) -> Sender<ReportRecord> {
+    debug_assert!(self.tx.is_some(), "Reporter already finished");
+    self.tx
+        .as_ref()
+        .expect("Reporter already finished - this is a bug")
+        .clone()
+}
+```
+
+#### Recommended Implementation (Option A)
+
+```rust
+/// Returns a clone of the sender for worker threads.
+///
+/// Returns `None` if the reporter has already been finished.
+/// This should not happen in normal usage since `finish()` consumes `self`.
+pub fn sender(&self) -> Option<Sender<ReportRecord>> {
+    self.tx.as_ref().cloned()
+}
+```
+
+```rust
+// In generate_conversion_report() at line 174:
+let sender = match reporter.sender() {
+    Some(s) => s,
+    None => {
+        eprintln!("Warning: Reporter was unexpectedly finished");
+        return Ok(());
+    }
+};
+```
+
+#### Testing Requirements
+1. Existing `test_report_summary` should still pass
+2. Add test verifying `sender()` returns `Some` for active reporter
+3. No new test needed for `None` case (requires `finish()` which consumes self)
+
+#### Verification Checklist
+- [ ] Change return type to `Option<Sender<ReportRecord>>`
+- [ ] Update `generate_conversion_report()` call site
+- [ ] Run `cargo test`
+- [ ] Run `cargo clippy`
+
+---
+
+### R3: Fix `file_name().unwrap()` in Report
+
+**File**: `src/image/report.rs`
+**Lines**: 324
+**Risk**: LOW
+**Effort**: Trivial
+
+#### Current Code
+```rust
+} else if destination.is_dir() {
+    let file_name = source.file_name().unwrap();
+    let dest_file = destination.join(file_name).with_extension(format);
+```
+
+#### Problem Analysis
+- `file_name()` returns `None` for paths ending in `..` or root paths like `/`
+- Unlikely in practice since this is called on validated source files
+- Still better to handle defensively
+
+#### Solution
+
+```rust
+} else if destination.is_dir() {
+    let file_name = match source.file_name() {
+        Some(name) => name,
+        None => {
+            // Path has no file name (e.g., "/" or ends with "..")
+            // Skip this pair silently
+            return Ok(());
+        }
+    };
+    let dest_file = destination.join(file_name).with_extension(format);
+```
+
+Or more concisely:
+```rust
+} else if destination.is_dir() {
+    let Some(file_name) = source.file_name() else {
+        return Ok(()); // Skip paths without file names
+    };
+    let dest_file = destination.join(file_name).with_extension(format);
+```
+
+#### Testing Requirements
+- Add unit test with edge case path (if feasible)
+- Existing tests should pass
+
+#### Verification Checklist
+- [ ] Replace `.unwrap()` with `let Some(...) else { return Ok(()); }`
+- [ ] Run `cargo test`
+- [ ] Run `cargo clippy`
+
+---
+
+### R4: Fix `file_name().unwrap()` in Video Encode
+
+**File**: `src/video/encode.rs`
+**Lines**: 116
+**Risk**: LOW
+**Effort**: Trivial
+
+#### Current Code
+```rust
+let dest_file = if source_path.is_file() {
+    if dest_path.extension().is_some() {
+        dest_path.to_path_buf()
+    } else {
+        dest_path
+            .join(file.file_name().unwrap())
+            .with_extension(&args.ext)
+    }
+} else {
+```
+
+#### Problem Analysis
+- `file.file_name()` is called on a path from `MediaSource::Filesystem`
+- The file was already validated to exist and be a file
+- Still could fail on unusual paths, better to handle defensively
+
+#### Solution
+
+```rust
+let dest_file = if source_path.is_file() {
+    if dest_path.extension().is_some() {
+        dest_path.to_path_buf()
+    } else {
+        let file_name = file.file_name().unwrap_or_default();
+        dest_path.join(file_name).with_extension(&args.ext)
+    }
+} else {
+```
+
+Or with early continue for the parallel iterator:
+```rust
+let dest_file = if source_path.is_file() {
+    if dest_path.extension().is_some() {
+        dest_path.to_path_buf()
+    } else {
+        let Some(file_name) = file.file_name() else {
+            pb_scan.inc(1);
+            return; // Skip files without valid names
+        };
+        dest_path.join(file_name).with_extension(&args.ext)
+    }
+} else {
+```
+
+#### Recommended Implementation
+Use `unwrap_or_default()` since we want to continue processing:
+
+```rust
+dest_path
+    .join(file.file_name().unwrap_or_default())
+    .with_extension(&args.ext)
+```
+
+#### Testing Requirements
+- Existing tests should pass
+- No new tests needed (edge case is extremely rare)
+
+#### Verification Checklist
+- [ ] Replace `.unwrap()` with `.unwrap_or_default()`
+- [ ] Run `cargo test`
+- [ ] Run `cargo clippy`
+
+---
+
+## Implementation Order
+
+Recommended order for implementing these fixes:
+
+| Order | ID | Reason |
+|-------|-----|--------|
+| 1 | R3 | Trivial fix, immediate improvement |
+| 2 | R4 | Trivial fix, immediate improvement |
+| 3 | R2 | Low effort, improves API safety |
+| 4 | R1 | Medium effort, requires dependency evaluation |
+
+### Batch Commit Strategy
+
+**Commit 1**: Fix trivial unwraps (R3 + R4)
+```
+fix: replace unwrap() with safe alternatives in report.rs and encode.rs
+
+- report.rs:324: Use let-else pattern for file_name()
+- encode.rs:116: Use unwrap_or_default() for file_name()
+```
+
+**Commit 2**: Fix Reporter API (R2)
+```
+refactor: return Option from Reporter::sender()
+
+- Change sender() return type from Sender to Option<Sender>
+- Update call site in generate_conversion_report()
+- Provides defensive API without expect() panic
+```
+
+**Commit 3**: Remove unsafe from AVIF encoding (R1)
+```
+refactor: remove unsafe block in AVIF encoding
+
+- Add bytemuck dependency for safe type punning
+- Replace unsafe slice::from_raw_parts with bytemuck::cast_slice
+- Verify RGBA8 layout compatibility at compile time
+```
+
+---
+
+## Additional Refactoring Opportunities
 
 ### Priority 2: Add More Tests
 
