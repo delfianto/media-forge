@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::video::builder::{FfmpegCommandBuilder, HwAccel, VideoCodec};
-use crate::video::{FFMPEG_PROGRESS_RE, Result, VideoArgs, VideoError, get_video_metadata};
+use crate::video::{
+    FFMPEG_PROGRESS_RE, Result, VideoArgs, VideoError, VideoSummary, get_video_metadata,
+};
 
 /// Represents a single video encoding task.
 #[derive(Debug, Clone)]
@@ -25,9 +27,6 @@ pub struct VideoTask {
 }
 
 /// Main entry point for video encoding orchestration.
-///
-/// This function verifies dependencies, scans for videos, collects tasks,
-/// and executes them in parallel using the specified number of threads.
 pub fn run(args: VideoArgs) -> anyhow::Result<()> {
     check_encoding_requirements()?;
 
@@ -42,14 +41,31 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
         walker.scan_with_progress(&source_path, "Scanning...")
     };
 
-    let tasks = collect_video_tasks(assets, &source_path, &dest_path, &args)?;
+    let (tasks, skipped) = collect_video_tasks(assets, &source_path, &dest_path, &args)?;
 
     println!("Found {} videos to process.", tasks.len());
-    if tasks.is_empty() {
+    if tasks.is_empty() && skipped == 0 {
         return Ok(());
     }
 
-    process_video_tasks(tasks, args)?;
+    let failed = if !tasks.is_empty() {
+        process_video_tasks(tasks.clone(), args)?
+    } else {
+        Vec::new()
+    };
+
+    let summary = VideoSummary {
+        total: tasks.len() + skipped,
+        succeeded: tasks.len() - failed.len(),
+        skipped,
+        failed,
+    };
+
+    summary.print_summary();
+
+    if summary.exit_code() != 0 {
+        return Err(anyhow::anyhow!("Some encodings failed"));
+    }
 
     Ok(())
 }
@@ -86,8 +102,9 @@ fn collect_video_tasks(
     source_path: &Path,
     dest_path: &Path,
     args: &VideoArgs,
-) -> Result<Vec<VideoTask>> {
+) -> Result<(Vec<VideoTask>, usize)> {
     let tasks_mutex = Arc::new(Mutex::new(Vec::new()));
+    let skipped_counter = std::sync::atomic::AtomicUsize::new(0);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads((num_cpus::get() / 2).max(4))
         .build()?;
@@ -121,9 +138,9 @@ fn collect_video_tasks(
                         dest_path.join(rel_path).with_extension(&args.ext)
                     };
 
-                    if !PathUtil::should_skip(&dest_file, args.overwrite)
-                        && let Ok(mut tasks) = tasks_mutex.lock()
-                    {
+                    if PathUtil::should_skip(&dest_file, args.overwrite) {
+                        skipped_counter.fetch_add(1, Ordering::SeqCst);
+                    } else if let Ok(mut tasks) = tasks_mutex.lock() {
                         tasks.push(VideoTask {
                             src: file.clone(),
                             dest: dest_file,
@@ -143,11 +160,11 @@ fn collect_video_tasks(
     .into_inner()
     .map_err(|_| VideoError::GpuError("Failed to unlock task list".into()))?;
 
-    Ok(tasks)
+    Ok((tasks, skipped_counter.load(Ordering::SeqCst)))
 }
 
 /// Orchestrates the parallel execution of video encoding tasks.
-fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
+fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<Vec<(PathBuf, String)>> {
     let mp = MultiProgress::new();
     let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
     pb_main.set_style(ui::main_bar_style());
@@ -161,6 +178,8 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     let pb_main = Arc::new(pb_main);
     let start_time = Instant::now();
 
+    let failures: Arc<Mutex<Vec<(PathBuf, String)>>> = Arc::new(Mutex::new(Vec::new()));
+
     pool.install(|| {
         tasks.par_iter().for_each(|task| {
             let pb_file = mp.add(ProgressBar::new(task.duration as u64));
@@ -169,7 +188,7 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
             let name = task
                 .src
                 .file_name()
-                .map(|n| n.to_string_lossy().to_string())
+                .map(|n: &std::ffi::OsStr| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
             let name_display = Naming::truncate_from_start(&name, 50);
 
@@ -177,6 +196,9 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
 
             if let Err(e) = convert_video(task, &args, &pb_file) {
                 mp.suspend(|| eprintln!("Error converting {:?}: {}", task.src, e));
+                if let Ok(mut f) = failures.lock() {
+                    f.push((task.src.clone(), e.to_string()));
+                }
             }
 
             pb_file.finish_and_clear();
@@ -187,7 +209,13 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
 
     pb_main.finish_with_message("Done!");
     println!("Total time: {:.2?}", start_time.elapsed());
-    Ok(())
+
+    let f = Arc::try_unwrap(failures)
+        .map_err(|_| VideoError::GpuError("Failed to unwrap failures".into()))?
+        .into_inner()
+        .map_err(|_| VideoError::GpuError("Failed to unlock failures".into()))?;
+
+    Ok(f)
 }
 
 /// Spawns an FFmpeg process to convert a single video file and tracks its progress.
