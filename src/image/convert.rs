@@ -576,11 +576,17 @@ fn encode_avif(img: &DynamicImage, dest: &Path, quality: u8, speed: u8) -> Resul
         .with_speed(speed);
 
     let pixels = img_rgba.as_raw();
-    let rgba_pixels = unsafe {
-        std::slice::from_raw_parts(pixels.as_ptr() as *const ravif::RGBA8, pixels.len() / 4)
-    };
+    let rgba_pixels: Vec<ravif::RGBA8> = pixels
+        .chunks_exact(4)
+        .map(|chunk| ravif::RGBA8 {
+            r: chunk[0],
+            g: chunk[1],
+            b: chunk[2],
+            a: chunk[3],
+        })
+        .collect();
 
-    let img_ravif = ravif::Img::new(rgba_pixels, width as usize, height as usize);
+    let img_ravif = ravif::Img::new(rgba_pixels.as_slice(), width as usize, height as usize);
     let out = enc
         .encode_rgba(img_ravif)
         .map_err(|e| ImageError::AvifEncoding(e.to_string()))?;
