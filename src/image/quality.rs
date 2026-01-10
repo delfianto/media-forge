@@ -1,4 +1,4 @@
-use crate::image::{ImageError, QualityArgs};
+use crate::image::{ImageError, QualityArgs, load_image};
 use image::GenericImageView;
 use ssimulacra2::{ColorPrimaries, Rgb, TransferCharacteristic, compute_frame_ssimulacra2};
 use std::path::Path;
@@ -22,8 +22,8 @@ pub fn run(args: QualityArgs) -> anyhow::Result<()> {
 ///
 /// Returns the quality score (0-100) or an error if images cannot be loaded or dimensions mismatch.
 pub fn compute_quality(original: &Path, distorted: &Path) -> anyhow::Result<f64> {
-    let img1 = image::open(original)?;
-    let img2 = image::open(distorted)?;
+    let img1 = load_image(original)?;
+    let img2 = load_image(distorted)?;
     compute_quality_from_image(&img1, &img2)
 }
 
