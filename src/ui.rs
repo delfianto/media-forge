@@ -11,7 +11,7 @@ pub const PROGRESS_CHARS: &str = "█▓░";
 /// Returns the standard style for indeterminate spinners used during file scanning.
 pub fn scanner_style() -> ProgressStyle {
     ProgressStyle::default_spinner()
-        .template("{spinner:.green} {msg} {pos} items found")
+        .template("{spinner:.green} {msg}")
         .expect("Invalid template")
 }
 
@@ -32,9 +32,7 @@ pub fn analyzing_style() -> ProgressStyle {
 /// Returns the standard style for main task progress bars.
 pub fn main_bar_style() -> ProgressStyle {
     ProgressStyle::default_bar()
-        .template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan}] {pos}/{len} ({eta}) {msg}",
-        )
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan}] {pos}/{len} ({eta}) {msg}")
         .expect("Invalid template")
         .progress_chars(PROGRESS_CHARS)
 }
