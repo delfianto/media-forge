@@ -1,36 +1,27 @@
 use crate::image::{ImageArgs, ImageError, Result, Task, TaskType};
+use crate::walker::{Asset, MediaSource, Walker};
 use crate::{
-    ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, Naming, PathUtil, SHUTDOWN, Scanner,
-    VIDEO_EXTENSIONS, ui,
+    ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, Naming, PathUtil, SHUTDOWN, VIDEO_EXTENSIONS,
+    ui,
 };
-use crossbeam_channel::{Sender, bounded};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use indicatif::{MultiProgress, ProgressBar};
-use rayon::iter::ParallelIterator;
-use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// Represents a unit of work to be processed by a worker thread.
 struct WorkItem {
-    /// The specific task to be executed.
     task: Task,
-    /// The progress bar for the container this task belongs to.
     pb_container: ProgressBar,
-    /// The main progress bar for the overall process.
     pb_main: Arc<ProgressBar>,
-    /// Channel to signal when the task is complete.
     complete_signal: Sender<()>,
 }
 
 /// Orchestrates the image conversion process.
-///
-/// This function initializes the thread pool, resolves paths, scans for files,
-/// and manages the concurrent processing of tasks using a bounded channel.
 pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     if cfg!(debug_assertions) {
         println!(
@@ -49,16 +40,21 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     let (source_path, dest_path) = PathUtil::resolve_paths(&args.source, &args.destination)
         .map_err(|_| ImageError::SourceNotFound(args.source.clone()))?;
 
-    let scanner = Scanner::new(args.depth);
-    let files = if source_path.is_file() {
-        vec![source_path.clone()]
+    let mut extensions = Vec::new();
+    extensions.extend_from_slice(IMAGE_EXTENSIONS);
+    extensions.extend_from_slice(ARCHIVE_EXTENSIONS);
+    extensions.extend_from_slice(VIDEO_EXTENSIONS);
+
+    let walker = Walker::new(&extensions, args.depth, true);
+    let assets = if source_path.is_file() {
+        walker.scan_flat(&source_path)
     } else {
         println!("Scanning {}...", source_path.display());
-        scanner.scan_with_progress(&source_path, "Scanning...")
+        walker.scan_with_progress(&source_path, "Scanning...")
     };
 
     let (tasks_by_container, total_files) =
-        collect_tasks(files, &source_path, &dest_path, &args.format, num_threads)?;
+        collect_tasks(assets, &source_path, &dest_path, &args.format, num_threads)?;
     if tasks_by_container.is_empty() {
         println!("No files found to process.");
         return Ok(());
@@ -89,11 +85,8 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
 }
 
 /// Collects conversion tasks by scanning files and archives in parallel.
-///
-/// Returns a map of tasks grouped by their parent container (folder or archive)
-/// and the total count of files to process.
 fn collect_tasks(
-    files: Vec<PathBuf>,
+    assets: Vec<Asset>,
     source_path: &Path,
     dest_path: &Path,
     format: &str,
@@ -110,91 +103,24 @@ fn collect_tasks(
     }
     let spinner_pool = Arc::new(Mutex::new(analysis_spinners));
 
-    let pb_total = mp.add(ProgressBar::new(files.len() as u64));
+    let pb_total = mp.add(ProgressBar::new(assets.len() as u64));
     pb_total.set_style(ui::main_bar_style());
 
     let total_files_counter = std::sync::atomic::AtomicUsize::new(0);
 
-    let all_tasks: Vec<Task> = files
+    use rayon::prelude::*;
+    let all_tasks: Vec<Task> = assets
         .par_iter()
-        .map(|file| {
-            let name = file
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default();
-
-            let pb_opt = {
-                let mut pool = spinner_pool.lock().unwrap();
-                pool.pop()
-            };
-
-            let ext = file
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-
-            let tasks = if ARCHIVE_EXTENSIONS.contains(&ext.as_str()) {
-                if let Some(ref pb) = pb_opt {
-                    pb.set_message(name.to_string());
-                    pb.enable_steady_tick(ui::SPINNER_TICK);
-                }
-
-                let t =
-                    collect_archive_tasks(file, source_path, dest_path, format).unwrap_or_default();
-
-                if let Some(ref pb) = pb_opt {
-                    pb.set_message("Idle");
-                    pb.disable_steady_tick();
-                }
-                t
-            } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-                let target_file = if source_path.is_file() {
-                    if dest_path.extension().is_some() {
-                        dest_path.to_path_buf()
-                    } else {
-                        dest_path
-                            .join(file.file_name().unwrap())
-                            .with_extension(format)
-                    }
-                } else {
-                    let rel_path = file.strip_prefix(source_path).unwrap_or(file);
-                    dest_path.join(rel_path).with_extension(format)
-                };
-
-                vec![Task {
-                    src_path: file.clone(),
-                    dest_path: target_file,
-                    task_type: TaskType::File,
-                }]
-            } else if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
-                let target_file = if source_path.is_file() {
-                    if dest_path.extension().is_some() {
-                        dest_path.to_path_buf()
-                    } else {
-                        dest_path.join(file.file_name().unwrap())
-                    }
-                } else {
-                    let rel_path = file.strip_prefix(source_path).unwrap_or(file);
-                    dest_path.join(rel_path)
-                };
-
-                vec![Task {
-                    src_path: file.clone(),
-                    dest_path: target_file,
-                    task_type: TaskType::Copy,
-                }]
-            } else {
-                Vec::new()
-            };
-
-            if let Some(pb) = pb_opt {
-                spinner_pool.lock().unwrap().push(pb);
-            }
-
-            total_files_counter.fetch_add(tasks.len(), Ordering::SeqCst);
-            pb_total.inc(1);
-            tasks
+        .map(|asset| {
+            process_asset_for_tasks(
+                asset,
+                source_path,
+                dest_path,
+                format,
+                &spinner_pool,
+                &total_files_counter,
+                &pb_total,
+            )
         })
         .flatten()
         .collect();
@@ -211,22 +137,7 @@ fn collect_tasks(
 
     let mut tasks_by_container: HashMap<String, Vec<Task>> = HashMap::new();
     for task in all_tasks {
-        let container_name = match &task.task_type {
-            TaskType::File | TaskType::Copy => task
-                .src_path
-                .strip_prefix(source_path)
-                .unwrap_or(&task.src_path)
-                .parent()
-                .unwrap_or(Path::new("root"))
-                .to_string_lossy()
-                .to_string(),
-            TaskType::Archive { .. } => task
-                .src_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown_archive".to_string()),
-        };
-
+        let container_name = get_container_name(&task, source_path);
         tasks_by_container
             .entry(container_name)
             .or_default()
@@ -237,55 +148,166 @@ fn collect_tasks(
     Ok((tasks_by_container, total_files))
 }
 
-/// Scans a ZIP archive for images and creates corresponding tasks.
-fn collect_archive_tasks(
-    archive_path: &Path,
+/// Helper to determine the grouping container name for a task.
+fn get_container_name(task: &Task, source_path: &Path) -> String {
+    match &task.task_type {
+        TaskType::File | TaskType::Copy => task
+            .src_path
+            .strip_prefix(source_path)
+            .unwrap_or(&task.src_path)
+            .parent()
+            .unwrap_or(Path::new("root"))
+            .to_string_lossy()
+            .to_string(),
+        TaskType::Archive { .. } => task
+            .src_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown_archive".to_string()),
+    }
+}
+
+/// Processes a single scanned asset to generate one or more conversion tasks.
+fn process_asset_for_tasks(
+    asset: &Asset,
     source_path: &Path,
     dest_path: &Path,
     format: &str,
-) -> Result<Vec<Task>> {
-    let mut tasks = Vec::new();
+    spinner_pool: &Arc<Mutex<Vec<ProgressBar>>>,
+    total_files_counter: &std::sync::atomic::AtomicUsize,
+    pb_total: &ProgressBar,
+) -> Vec<Task> {
+    let pb_opt = {
+        let mut pool = spinner_pool.lock().unwrap();
+        pool.pop()
+    };
 
-    let zip_file = fs::File::open(archive_path)?;
-    let mut archive = zip::ZipArchive::new(zip_file)?;
+    if let Some(ref pb) = pb_opt {
+        let name = asset.path.file_name().unwrap_or_default().to_string_lossy();
+        pb.set_message(name.to_string());
+        pb.enable_steady_tick(ui::SPINNER_TICK);
+    }
 
+    let mut generated_tasks = Vec::new();
+
+    match &asset.source {
+        MediaSource::Filesystem(path) => {
+            generate_filesystem_tasks(path, source_path, dest_path, format, &mut generated_tasks);
+        }
+        MediaSource::Archive {
+            archive_path,
+            entry_name,
+        } => {
+            generate_archive_tasks(
+                archive_path,
+                entry_name,
+                source_path,
+                dest_path,
+                format,
+                &mut generated_tasks,
+            );
+        }
+    }
+
+    if let Some(ref pb) = pb_opt {
+        pb.set_message("Idle");
+        pb.disable_steady_tick();
+    }
+
+    if let Some(pb) = pb_opt {
+        spinner_pool.lock().unwrap().push(pb);
+    }
+
+    total_files_counter.fetch_add(generated_tasks.len(), Ordering::SeqCst);
+    pb_total.inc(1);
+    generated_tasks
+}
+
+/// Generates tasks for a file on the filesystem.
+fn generate_filesystem_tasks(
+    path: &Path,
+    source_path: &Path,
+    dest_path: &Path,
+    format: &str,
+    tasks: &mut Vec<Task>,
+) {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        let target_file = if source_path.is_file() {
+            if dest_path.extension().is_some() {
+                dest_path.to_path_buf()
+            } else {
+                dest_path
+                    .join(path.file_name().unwrap())
+                    .with_extension(format)
+            }
+        } else {
+            let rel_path = path.strip_prefix(source_path).unwrap_or(path);
+            dest_path.join(rel_path).with_extension(format)
+        };
+
+        tasks.push(Task {
+            src_path: path.to_path_buf(),
+            dest_path: target_file,
+            task_type: TaskType::File,
+        });
+    } else if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+        let target_file = if source_path.is_file() {
+            if dest_path.extension().is_some() {
+                dest_path.to_path_buf()
+            } else {
+                dest_path.join(path.file_name().unwrap())
+            }
+        } else {
+            let rel_path = path.strip_prefix(source_path).unwrap_or(path);
+            dest_path.join(rel_path)
+        };
+
+        tasks.push(Task {
+            src_path: path.to_path_buf(),
+            dest_path: target_file,
+            task_type: TaskType::Copy,
+        });
+    }
+}
+
+/// Generates tasks for an entry inside an archive.
+fn generate_archive_tasks(
+    archive_path: &Path,
+    entry_name: &str,
+    source_path: &Path,
+    dest_path: &Path,
+    format: &str,
+    tasks: &mut Vec<Task>,
+) {
     let rel_path = archive_path
         .strip_prefix(source_path)
         .unwrap_or(archive_path);
     let parent = rel_path.parent().unwrap_or(Path::new(""));
     let stem = archive_path.file_stem().unwrap_or_default();
-    let cbz_dest_folder = dest_path.join(parent).join(stem);
 
-    for i in 0..archive.len() {
-        let a_file = archive.by_index(i)?;
-        if a_file.is_file() {
-            let a_ext = Path::new(a_file.name())
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
+    let entry_path = Path::new(entry_name);
+    let dest_file = dest_path
+        .join(parent)
+        .join(stem)
+        .join(entry_path)
+        .with_extension(format);
 
-            if IMAGE_EXTENSIONS.contains(&a_ext.as_str()) {
-                let target_file = cbz_dest_folder.join(a_file.name()).with_extension(format);
-
-                tasks.push(Task {
-                    src_path: archive_path.to_path_buf(),
-                    dest_path: target_file,
-                    task_type: TaskType::Archive {
-                        internal_path: a_file.name().to_string(),
-                    },
-                });
-            }
-        }
-    }
-
-    Ok(tasks)
+    tasks.push(Task {
+        src_path: archive_path.to_path_buf(),
+        dest_path: dest_file,
+        task_type: TaskType::Archive {
+            internal_path: entry_name.to_string(),
+        },
+    });
 }
 
-/// Executes conversion tasks with progress tracking using a bounded channel.
-///
-/// This function sets up a producer-consumer model where tasks are fed into a
-/// bounded channel and processed by a fixed pool of worker threads.
+/// Executes conversion tasks with progress tracking.
 fn process_tasks(
     tasks_by_container: HashMap<String, Vec<Task>>,
     container_names: Vec<String>,
@@ -309,11 +331,6 @@ fn process_tasks(
     let spinner_pool = Arc::new(Mutex::new(spinners));
 
     let start_instant = Instant::now();
-    // Use &args directly or clone if needed for threads. Since threads are scoped, reference is fine?
-    // wait, args is passed to threads. threads move. So we need to clone or Arc it?
-    // args is ImageArgs struct (Clone).
-    // process_tasks takes &args.
-    // We can clone it for the loop.
     let args_arc = Arc::new(args.clone());
     let pb_main = Arc::new(pb_main);
 
@@ -321,102 +338,8 @@ fn process_tasks(
     let (tx, rx) = bounded::<WorkItem>(num_threads * 2);
 
     std::thread::scope(|s| {
-        // Spawn workers
-        for _ in 0..num_threads {
-            let rx = rx.clone();
-            let args = args_arc.clone();
-            let spinner_pool = spinner_pool.clone();
-
-            s.spawn(move || {
-                while let Ok(item) = rx.recv() {
-                    if SHUTDOWN.load(Ordering::SeqCst) {
-                        return;
-                    }
-
-                    let name = match &item.task.task_type {
-                        TaskType::File | TaskType::Copy => item
-                            .task
-                            .src_path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "unknown".to_string()),
-                        TaskType::Archive { internal_path } => internal_path.clone(),
-                    };
-
-                    let name_display = Naming::truncate_from_start(&name, 30);
-
-                    // Acquire spinner for UI feedback
-                    let pb_opt = {
-                        let mut pool = spinner_pool.lock().unwrap();
-                        pool.pop()
-                    };
-
-                    if let Some(spinner) = &pb_opt {
-                        spinner.set_message(format!("Processing: {}", name_display));
-                        spinner.enable_steady_tick(ui::SPINNER_TICK);
-                    }
-
-                    if let Err(e) = process_single_task(&item, &args) {
-                        eprintln!("Error processing {}: {}", name_display, e);
-                    }
-
-                    if let Some(spinner) = pb_opt {
-                        spinner.set_message("Idle");
-                        spinner.disable_steady_tick();
-                        spinner_pool.lock().unwrap().push(spinner);
-                    }
-
-                    item.pb_container.inc(1);
-                    item.pb_main.inc(1);
-
-                    // Signal completion to the producer
-                    let _ = item.complete_signal.send(());
-                }
-            });
-        }
-
-        // Producer loop
-        for container_name in container_names {
-            if let Some(tasks) = tasks_by_container.get(&container_name) {
-                let pb_container = mp.add(ProgressBar::new(tasks.len() as u64));
-                pb_container.set_style(ui::sub_bar_style());
-                pb_container.set_message(container_name.clone());
-
-                let (done_tx, done_rx) = bounded(0);
-
-                for task in tasks {
-                    if SHUTDOWN.load(Ordering::SeqCst) {
-                        break;
-                    }
-
-                    let item = WorkItem {
-                        task: task.clone(),
-                        pb_container: pb_container.clone(),
-                        pb_main: pb_main.clone(),
-                        complete_signal: done_tx.clone(),
-                    };
-
-                    if tx.send(item).is_err() {
-                        break; // Channel closed
-                    }
-                }
-
-                // Wait for all tasks in this container to finish.
-                drop(done_tx);
-
-                for _ in 0..tasks.len() {
-                    if done_rx.recv().is_err() {
-                        break;
-                    }
-                }
-
-                pb_container.finish_and_clear();
-                mp.remove(&pb_container);
-            }
-        }
-
-        // Close channels to stop workers
-        drop(tx);
+        spawn_workers(s, rx, args_arc, spinner_pool.clone(), num_threads);
+        run_producer(tasks_by_container, container_names, tx, &mp, &pb_main);
     });
 
     {
@@ -432,6 +355,120 @@ fn process_tasks(
     println!("Completed in {:.2?}", duration);
 
     Ok(())
+}
+
+fn spawn_workers<'a>(
+    scope: &'a std::thread::Scope<'a, '_>,
+    rx: Receiver<WorkItem>,
+    args: Arc<ImageArgs>,
+    spinner_pool: Arc<Mutex<Vec<ProgressBar>>>,
+    num_threads: usize,
+) {
+    for _ in 0..num_threads {
+        let rx = rx.clone();
+        let args = args.clone();
+        let spinner_pool = spinner_pool.clone();
+
+        scope.spawn(move || {
+            while let Ok(item) = rx.recv() {
+                if SHUTDOWN.load(Ordering::SeqCst) {
+                    return;
+                }
+
+                process_work_item(item, &args, &spinner_pool);
+            }
+        });
+    }
+}
+
+fn process_work_item(
+    item: WorkItem,
+    args: &ImageArgs,
+    spinner_pool: &Arc<Mutex<Vec<ProgressBar>>>,
+) {
+    let name = match &item.task.task_type {
+        TaskType::File | TaskType::Copy => item
+            .task
+            .src_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        TaskType::Archive { internal_path } => internal_path.clone(),
+    };
+
+    let name_display = Naming::truncate_from_start(&name, 30);
+
+    let pb_opt = {
+        let mut pool = spinner_pool.lock().unwrap();
+        pool.pop()
+    };
+
+    if let Some(spinner) = &pb_opt {
+        spinner.set_message(format!("Processing: {}", name_display));
+        spinner.enable_steady_tick(ui::SPINNER_TICK);
+    }
+
+    if let Err(e) = process_single_task(&item, args) {
+        eprintln!("Error processing {}: {}", name_display, e);
+    }
+
+    if let Some(spinner) = pb_opt {
+        spinner.set_message("Idle");
+        spinner.disable_steady_tick();
+        spinner_pool.lock().unwrap().push(spinner);
+    }
+
+    item.pb_container.inc(1);
+    item.pb_main.inc(1);
+
+    let _ = item.complete_signal.send(());
+}
+
+fn run_producer(
+    tasks_by_container: HashMap<String, Vec<Task>>,
+    container_names: Vec<String>,
+    tx: Sender<WorkItem>,
+    mp: &MultiProgress,
+    pb_main: &Arc<ProgressBar>,
+) {
+    for container_name in container_names {
+        if let Some(tasks) = tasks_by_container.get(&container_name) {
+            let pb_container = mp.add(ProgressBar::new(tasks.len() as u64));
+            pb_container.set_style(ui::sub_bar_style());
+            pb_container.set_message(container_name.clone());
+
+            let (done_tx, done_rx) = bounded(0);
+
+            for task in tasks {
+                if SHUTDOWN.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                let item = WorkItem {
+                    task: task.clone(),
+                    pb_container: pb_container.clone(),
+                    pb_main: pb_main.clone(),
+                    complete_signal: done_tx.clone(),
+                };
+
+                if tx.send(item).is_err() {
+                    break;
+                }
+            }
+
+            drop(done_tx);
+
+            for _ in 0..tasks.len() {
+                if done_rx.recv().is_err() {
+                    break;
+                }
+            }
+
+            pb_container.finish_and_clear();
+            mp.remove(&pb_container);
+        }
+    }
+    drop(tx);
 }
 
 /// Processes a single image conversion task.
@@ -478,7 +515,7 @@ fn process_single_task(item: &WorkItem, args: &ImageArgs) -> Result<()> {
     match args.format.as_str() {
         "avif" => {
             let img = image::load_from_memory(&img_data)?;
-            drop(img_data); // Free raw buffer early to reduce memory pressure
+            drop(img_data);
             encode_avif(&img, &task.dest_path, args.quality, args.speed)?;
         }
         "webp" => {

@@ -12,14 +12,14 @@ pub fn load_image(path: &Path) -> anyhow::Result<image::DynamicImage> {
     match image::open(path) {
         Ok(img) => Ok(img),
         Err(e) => {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                if ext.eq_ignore_ascii_case("avif") {
-                    let file = std::fs::File::open(path)?;
-                    let reader = std::io::BufReader::new(file);
-                    return image::codecs::avif::AvifDecoder::new(reader)
-                        .and_then(|d| image::DynamicImage::from_decoder(d))
-                        .map_err(|e| anyhow::anyhow!("Failed to decode AVIF explicitly: {}", e));
-                }
+            if let Some(ext) = path.extension().and_then(|s| s.to_str())
+                && ext.eq_ignore_ascii_case("avif")
+            {
+                let file = std::fs::File::open(path)?;
+                let reader = std::io::BufReader::new(file);
+                return image::codecs::avif::AvifDecoder::new(reader)
+                    .and_then(image::DynamicImage::from_decoder)
+                    .map_err(|e| anyhow::anyhow!("Failed to decode AVIF explicitly: {}", e));
             }
             Err(anyhow::anyhow!("Failed to open image {:?}: {}", path, e))
         }
@@ -172,7 +172,10 @@ pub(crate) enum TaskType {
     /// Processing a standalone image file.
     File,
     /// Processing an image file located within a ZIP/CBZ archive.
-    Archive { internal_path: String },
+    Archive {
+        /// The path of the file inside the archive.
+        internal_path: String,
+    },
     /// Directly copying a non-image file.
     Copy,
 }

@@ -158,8 +158,6 @@ pub fn generate_conversion_report(
 ) -> anyhow::Result<()> {
     println!("\nGenerating quality report...");
 
-    // Determine the report path. If destination is a directory, verify it contains report.csv
-    // If destination is a file, put report.csv in parent.
     let report_path = if destination.is_dir() {
         destination.join("report.csv")
     } else {
@@ -171,8 +169,6 @@ pub fn generate_conversion_report(
 
     let reporter = Reporter::new(report_path);
     let sender = reporter.sender();
-
-    // Identify pairs
     let pairs = collect_comparison_pairs(source, destination, format)?;
 
     if pairs.is_empty() {
@@ -191,11 +187,9 @@ pub fn generate_conversion_report(
         .par_iter()
         .for_each(|(src_path, dest_path, src_data_loader)| {
             let result = (|| -> anyhow::Result<()> {
-                // Load original
                 let img_original = src_data_loader()?;
                 let original_size = img_original.1;
 
-                // Load distorted
                 let img_distorted = crate::image::load_image(dest_path)?;
                 let final_size = fs::metadata(dest_path)?.len();
 
@@ -241,20 +235,15 @@ fn collect_comparison_pairs(
     let mut pairs = Vec::new();
 
     if source.is_file() {
-        if source.extension().map_or(false, |e| {
-            e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("cbz")
-        }) {
-            // Source is CBZ, Dest MUST be directory
+        if source
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("cbz"))
+        {
             if !destination.is_dir() {
                 println!("Warning: Source is Archive but Destination is File. Cannot compare.");
                 return Ok(vec![]);
             }
 
-            // Iterate ZIP
-            // We can't easily pass a closure that captures the ZIP file reader because it's not Sync/Send easily if open.
-            // We will open zip per file in the loader? Inefficient.
-            // Or read all entries now? No, OOM.
-            // We store path and internal path.
             let file = fs::File::open(source)?;
             let mut archive = zip::ZipArchive::new(file)?;
 
@@ -289,7 +278,6 @@ fn collect_comparison_pairs(
                 }
             }
         } else if destination.is_file() {
-            // File -> File
             let src_path_clone = source.to_path_buf();
             let loader: DataLoader = Box::new(move || {
                 let buf = fs::read(&src_path_clone)?;
@@ -299,7 +287,6 @@ fn collect_comparison_pairs(
             });
             pairs.push((source.to_path_buf(), destination.to_path_buf(), loader));
         } else if destination.is_dir() {
-            // File -> Dir (find file with same name but new extension)
             let file_name = source.file_name().unwrap();
             let dest_file = destination.join(file_name).with_extension(format);
             if dest_file.exists() {
