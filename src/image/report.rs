@@ -220,6 +220,7 @@ pub fn generate_conversion_report(
         });
 
     pb.finish_with_message("Analysis Complete");
+    drop(sender); // Close the channel from this side to allow reporter to finish
     reporter.finish();
 
     Ok(())
