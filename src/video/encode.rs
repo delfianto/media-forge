@@ -1,4 +1,5 @@
-use crate::{Naming, PathUtil, ProcessManager, SHUTDOWN, Scanner, VIDEO_EXTENSIONS, ui};
+use crate::walker::{Asset, MediaSource, Walker};
+use crate::{Naming, PathUtil, ProcessManager, SHUTDOWN, VIDEO_EXTENSIONS, ui};
 use indicatif::{MultiProgress, ProgressBar};
 use rayon::prelude::*;
 use std::fs;
@@ -32,15 +33,15 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
     let (source_path, dest_path) = PathUtil::resolve_paths(&args.source, &args.destination)
         .map_err(|_| VideoError::SourceNotFound(args.source.clone()))?;
 
-    let scanner = Scanner::new(args.depth);
-    let files = if source_path.is_file() {
-        vec![source_path.clone()]
+    let walker = Walker::new(VIDEO_EXTENSIONS, args.depth, true);
+    let assets = if source_path.is_file() {
+        walker.scan_flat(&source_path)
     } else {
         println!("Scanning {} for videos...", source_path.display());
-        scanner.scan_with_progress(&source_path, "Scanning...")
+        walker.scan_with_progress(&source_path, "Scanning...")
     };
 
-    let tasks = collect_video_tasks(files, &source_path, &dest_path, &args)?;
+    let tasks = collect_video_tasks(assets, &source_path, &dest_path, &args)?;
 
     println!("Found {} videos to process.", tasks.len());
     if tasks.is_empty() {
@@ -80,7 +81,7 @@ fn check_encoding_requirements() -> Result<()> {
 /// Filters for valid video extensions, checks metadata, and skips files
 /// based on overwrite settings and existing output.
 fn collect_video_tasks(
-    files: Vec<PathBuf>,
+    assets: Vec<Asset>,
     source_path: &Path,
     dest_path: &Path,
     args: &VideoArgs,
@@ -90,51 +91,48 @@ fn collect_video_tasks(
         .num_threads((num_cpus::get() / 2).max(4))
         .build()?;
 
-    let pb_scan = ProgressBar::new(files.len() as u64);
+    let pb_scan = ProgressBar::new(assets.len() as u64);
     pb_scan.set_style(ui::main_bar_style());
 
     pool.install(|| {
-        files.par_iter().for_each(|file| {
-            let name = file
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default();
-            pb_scan.set_message(name.to_string());
+        assets.par_iter().for_each(|asset| {
+            if let MediaSource::Filesystem(file) = &asset.source {
+                let name = file
+                    .file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default();
+                pb_scan.set_message(name.to_string());
 
-            let ext = file
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-
-            if VIDEO_EXTENSIONS.contains(&ext.as_str())
-                && let Ok(meta) = get_video_metadata(file)
-                && meta.codec != "av1"
-                && meta.duration > 0.0
-            {
-                let dest_file = if source_path.is_file() {
-                    if dest_path.extension().is_some() {
-                        dest_path.to_path_buf()
-                    } else {
-                        dest_path
-                            .join(file.file_name().unwrap())
-                            .with_extension(&args.ext)
-                    }
-                } else {
-                    let rel_path = file.strip_prefix(source_path).unwrap_or(file);
-                    dest_path.join(rel_path).with_extension(&args.ext)
-                };
-
-                if !PathUtil::should_skip(&dest_file, args.overwrite)
-                    && let Ok(mut tasks) = tasks_mutex.lock()
+                // Walker already filtered extensions, but we check metadata/skip logic
+                if let Ok(meta) = get_video_metadata(file)
+                    && meta.codec != "av1"
+                    && meta.duration > 0.0
                 {
-                    tasks.push(VideoTask {
-                        src: file.clone(),
-                        dest: dest_file,
-                        duration: meta.duration,
-                    });
+                    let dest_file = if source_path.is_file() {
+                        if dest_path.extension().is_some() {
+                            dest_path.to_path_buf()
+                        } else {
+                            dest_path
+                                .join(file.file_name().unwrap())
+                                .with_extension(&args.ext)
+                        }
+                    } else {
+                        let rel_path = file.strip_prefix(source_path).unwrap_or(file);
+                        dest_path.join(rel_path).with_extension(&args.ext)
+                    };
+
+                    if !PathUtil::should_skip(&dest_file, args.overwrite)
+                        && let Ok(mut tasks) = tasks_mutex.lock()
+                    {
+                        tasks.push(VideoTask {
+                            src: file.clone(),
+                            dest: dest_file,
+                            duration: meta.duration,
+                        });
+                    }
                 }
             }
+            // We ignore archives for video encoding for now (ffmpeg doesn't read zip directly efficiently)
 
             pb_scan.inc(1);
         });

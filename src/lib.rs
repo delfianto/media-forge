@@ -8,13 +8,13 @@
 pub mod image;
 pub mod ui;
 pub mod video;
+pub mod walker;
 
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use walkdir::WalkDir;
 
 /// Global flag to signal shutdown (e.g., on Ctrl+C).
 pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -61,91 +61,6 @@ impl ProcessManager {
             }
             pids.clear();
         }
-    }
-}
-
-/// Recursively scans directories for supported media files.
-pub struct Scanner {
-    /// Maximum recursion depth for directory traversal.
-    pub max_depth: usize,
-}
-
-impl Scanner {
-    /// Creates a new scanner with the specified maximum depth.
-    pub fn new(max_depth: usize) -> Self {
-        Self { max_depth }
-    }
-
-    /// Scans a directory for supported media files with a progress callback.
-    pub fn scan_with_callback<F>(&self, root: &Path, mut callback: F) -> Vec<PathBuf>
-    where
-        F: FnMut(&Path),
-    {
-        WalkDir::new(root)
-            .max_depth(self.max_depth)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .inspect(|e| callback(e.path()))
-            .filter(|e| e.file_type().is_file())
-            .map(|e| e.path().to_path_buf())
-            .filter(|p| {
-                let ext = p
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_lowercase());
-                if let Some(ext) = ext {
-                    IMAGE_EXTENSIONS.contains(&ext.as_str())
-                        || ARCHIVE_EXTENSIONS.contains(&ext.as_str())
-                        || VIDEO_EXTENSIONS.contains(&ext.as_str())
-                } else {
-                    false
-                }
-            })
-            .collect()
-    }
-
-    /// Scans a directory for supported media files.
-    pub fn scan(&self, root: &Path) -> Vec<PathBuf> {
-        self.scan_with_callback(root, |_| {})
-    }
-
-    /// Scans a directory for all files with a progress callback.
-    pub fn scan_all_with_callback<F>(&self, root: &Path, mut callback: F) -> Vec<PathBuf>
-    where
-        F: FnMut(&Path),
-    {
-        WalkDir::new(root)
-            .max_depth(self.max_depth)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .inspect(|e| callback(e.path()))
-            .filter(|e| e.file_type().is_file())
-            .map(|e| e.path().to_path_buf())
-            .collect()
-    }
-
-    /// Scans a directory for all files.
-    pub fn scan_all(&self, root: &Path) -> Vec<PathBuf> {
-        self.scan_all_with_callback(root, |_| {})
-    }
-
-    /// Scans a directory for supported media files with a progress bar.
-    pub fn scan_with_progress(&self, root: &Path, msg: &str) -> Vec<PathBuf> {
-        let pb = crate::ui::create_scanner(msg);
-        let mut items_found = 0;
-        let files = self.scan_with_callback(root, |path| {
-            if path.is_file() {
-                items_found += 1;
-                pb.set_position(items_found);
-            }
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default();
-            pb.set_message(format!("Scanning: {}", name));
-        });
-        pb.finish_and_clear();
-        files
     }
 }
 
@@ -283,31 +198,5 @@ mod tests {
         assert!(Naming::is_cover_image("front_cover.webp"));
         assert!(Naming::is_cover_image("Folder.jpg"));
         assert!(!Naming::is_cover_image("page_005.jpg"));
-    }
-
-    #[test]
-    fn test_scanner_all_files() {
-        use std::fs::File;
-        let temp_dir = tempfile::tempdir().unwrap();
-        File::create(temp_dir.path().join("test.txt")).unwrap();
-        File::create(temp_dir.path().join("test.mp4")).unwrap();
-        File::create(temp_dir.path().join("test.jpg")).unwrap();
-
-        let scanner = Scanner::new(1);
-        let files = scanner.scan_all(temp_dir.path());
-        assert_eq!(files.len(), 3);
-    }
-
-    #[test]
-    fn test_scanner_single_file() {
-        use std::fs::File;
-        let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("test.mp4");
-        File::create(&file_path).unwrap();
-
-        let scanner = Scanner::new(1);
-        let files = scanner.scan(&file_path);
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0], file_path.canonicalize().unwrap_or(file_path));
     }
 }
