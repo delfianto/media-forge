@@ -15,8 +15,10 @@ pub enum MediaSource {
 
 #[derive(Debug, Clone)]
 pub struct Asset {
-    pub path: PathBuf,       // The actual file on disk (zip or image)
-    pub source: MediaSource, // Metadata about where it came from
+    /// The actual file on disk (zip or image)
+    pub path: PathBuf,
+    /// Metadata about where it came from
+    pub source: MediaSource,
 }
 
 pub struct Walker {
@@ -45,12 +47,7 @@ impl Walker {
     pub fn scan_with_progress(&self, root: &Path, msg: &str) -> Vec<Asset> {
         let pb = crate::ui::create_scanner(msg);
         let mut assets = Vec::new();
-        // We can't easily report progress during recursion without passing PB down
-        // or using a callback.
-        // For simplicity, let's just scan and update PB on total count after?
-        // Or implement a callback version of scan.
 
-        // Let's implement scan_recursive with callback support.
         self.scan_recursive_with_cb(root, root, &mut assets, 0, &|count| {
             pb.set_position(count as u64);
             pb.set_message(format!("Scanning... {} items", count));
@@ -60,6 +57,7 @@ impl Walker {
         assets
     }
 
+    /// Recursively scans directories with a callback for progress updates.
     fn scan_recursive_with_cb(
         &self,
         _current_root: &Path,
@@ -111,14 +109,6 @@ impl Walker {
             let parent = match &asset.source {
                 MediaSource::Filesystem(p) => p.parent().unwrap_or(root).to_path_buf(),
                 MediaSource::Archive { archive_path, .. } => {
-                    // For archive content, the "parent" is effectively the archive itself
-                    // or the folder containing the archive?
-                    // "group_by_directory" implies we want to group images that belong together.
-                    // For CBZ creation, we usually group images in a folder.
-                    // If we are scanning a folder of images -> one CBZ.
-                    // If we are scanning a folder of subfolders -> multiple CBZs.
-                    // If we are scanning a ZIP... we don't usually create a CBZ from a ZIP (conversion does).
-                    // Let's assume for grouped scan we key by the physical directory containing the item.
                     archive_path.parent().unwrap_or(root).to_path_buf()
                 }
             };
@@ -127,6 +117,7 @@ impl Walker {
         groups
     }
 
+    /// Recursively scans directories without progress updates.
     fn scan_recursive(
         &self,
         current_root: &Path,
@@ -137,6 +128,8 @@ impl Walker {
         self.scan_recursive_with_cb(current_root, current_path, assets, depth, &|_| {});
     }
 
+    /// Checks if a file matches the target extensions and adds it to the assets list.
+    /// Also inspects supported archives (zip/cbz) to add their contents as assets.
     fn check_and_add_file(&self, path: &Path, assets: &mut Vec<Asset>) -> bool {
         let ext = path
             .extension()
@@ -144,7 +137,6 @@ impl Walker {
             .unwrap_or("")
             .to_lowercase();
 
-        // Check if it's a target extension
         if self.extensions.contains(&ext) {
             assets.push(Asset {
                 path: path.to_path_buf(),
@@ -153,7 +145,6 @@ impl Walker {
             return true;
         }
 
-        // Check if it's a supported archive (zip/cbz) to look inside
         if (ext == "zip" || ext == "cbz")
             && let Ok(file) = fs::File::open(path)
             && let Ok(mut archive) = ZipArchive::new(file)
@@ -173,7 +164,7 @@ impl Walker {
 
                     if self.extensions.contains(&entry_ext) {
                         assets.push(Asset {
-                            path: path.to_path_buf(), // The zip file path
+                            path: path.to_path_buf(),
                             source: MediaSource::Archive {
                                 archive_path: path.to_path_buf(),
                                 entry_name: name,

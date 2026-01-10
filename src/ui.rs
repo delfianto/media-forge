@@ -1,23 +1,24 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
+/// Tick rate for indeterminate spinners.
 pub const SPINNER_TICK: Duration = Duration::from_millis(100);
 
-/// Returns the standard style for indeterminate spinners (e.g., scanning).
+/// Returns the standard style for indeterminate spinners used during file scanning.
 pub fn scanner_style() -> ProgressStyle {
     ProgressStyle::default_spinner()
         .template("{spinner:.green} {msg} {pos} items found")
         .expect("Invalid template")
 }
 
-/// Returns a generic spinner style for worker threads.
+/// Returns a generic spinner style for worker threads to indicate activity.
 pub fn generic_spinner_style() -> ProgressStyle {
     ProgressStyle::default_spinner()
         .template("{spinner:.green} {msg}")
         .expect("Invalid template")
 }
 
-/// Returns the standard style for analysis spinners.
+/// Returns the standard style for analysis spinners used during task planning.
 pub fn analyzing_style() -> ProgressStyle {
     ProgressStyle::default_spinner()
         .template("{spinner:.blue} Analyzing: {msg}")
@@ -28,13 +29,13 @@ pub fn analyzing_style() -> ProgressStyle {
 pub fn main_bar_style() -> ProgressStyle {
     ProgressStyle::default_bar()
         .template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}"
         )
         .expect("Invalid template")
-        .progress_chars("#>-")
+        .progress_chars("#>-based")
 }
 
-/// Returns the standard style for sub-task/container progress bars.
+/// Returns the standard style for sub-task or container-level progress bars.
 pub fn sub_bar_style() -> ProgressStyle {
     ProgressStyle::default_bar()
         .template("  {bar:30.magenta/blue} {pos}/{len} {msg}")
@@ -42,7 +43,7 @@ pub fn sub_bar_style() -> ProgressStyle {
         .progress_chars("=>-")
 }
 
-/// Returns the standard style for single file progress (e.g. video encoding).
+/// Returns the standard style for single file progress, typically used for long-running video encoding.
 pub fn file_progress_style() -> ProgressStyle {
     ProgressStyle::default_bar()
         .template("  {msg}\n  {bar:40.magenta/blue} {percent}% {eta}")
@@ -50,7 +51,7 @@ pub fn file_progress_style() -> ProgressStyle {
         .progress_chars("=>-")
 }
 
-/// Creates a standard scanner progress bar.
+/// Creates and initializes a standard scanner progress bar with a message.
 pub fn create_scanner(msg: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(scanner_style());

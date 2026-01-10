@@ -28,7 +28,7 @@ pub const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cbz"];
 /// Supported video extensions for hardware-accelerated encoding.
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v", "mpv", "webm"];
 
-/// Registry for active child process PIDs.
+/// Registry for active child process PIDs to ensure cleanup on termination.
 static ACTIVE_PROCESSES: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 /// Manages external child processes to ensure they are cleaned up on exit.
@@ -131,8 +131,7 @@ impl Naming {
         }
     }
 
-    /// Truncates a filename to fit within a maximum length by keeping the end of the name,
-    /// handling Unicode correctly.
+    /// Truncates a filename to fit within a maximum length by keeping the end of the name.
     pub fn truncate_from_start(name: &str, max_len: usize) -> String {
         let char_count = name.chars().count();
         if char_count <= max_len {

@@ -59,6 +59,7 @@ pub fn run_quality(args: QualityArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Verifies that FFmpeg is installed and has the libvmaf filter enabled.
 fn check_vmaf_requirements() -> Result<()> {
     let output = Command::new("ffmpeg").arg("-filters").output()?;
     let filters = String::from_utf8_lossy(&output.stdout);
@@ -68,6 +69,7 @@ fn check_vmaf_requirements() -> Result<()> {
     Ok(())
 }
 
+/// Orchestrates the VMAF calculation by spawning an FFmpeg process with a complex filter.
 fn calculate_vmaf(
     args: &QualityArgs,
     meta: &VideoMeta,
@@ -120,7 +122,6 @@ fn calculate_vmaf(
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-hide_banner", "-stats", "-loglevel", "info"]);
 
-    // Encoded input
     if args.start > 0 {
         cmd.args(["-ss", &args.start.to_string()]);
     }
@@ -134,7 +135,6 @@ fn calculate_vmaf(
         args.encoded.to_str().unwrap(),
     ]);
 
-    // Original input
     if args.start > 0 {
         cmd.args(["-ss", &args.start.to_string()]);
     }
@@ -210,10 +210,10 @@ fn calculate_vmaf(
     Ok(scores)
 }
 
+/// Parses the FFmpeg output to extract VMAF scores using regular expressions.
 fn parse_vmaf_output(output: &str) -> Result<VmafScores> {
     for line in output.lines() {
         if let Some(caps) = VMAF_SCORE_RE.captures(line) {
-            // Check for simple aggregate score: VMAF score: 95.123
             if let Some(score_match) = caps.get(1) {
                 return Ok(VmafScores {
                     mean: score_match.as_str().parse().unwrap_or(0.0),
@@ -222,7 +222,6 @@ fn parse_vmaf_output(output: &str) -> Result<VmafScores> {
                 });
             }
 
-            // Check for detailed summary: mean: 95.123 min: 80.456 max: 99.123
             if let (Some(mean), Some(min), Some(max)) = (caps.get(2), caps.get(3), caps.get(4)) {
                 return Ok(VmafScores {
                     mean: mean.as_str().parse().unwrap_or(0.0),
@@ -241,6 +240,7 @@ fn parse_vmaf_output(output: &str) -> Result<VmafScores> {
     )))
 }
 
+/// Prints a formatted summary of the VMAF scores and qualitative rating to the console.
 fn display_vmaf_results(scores: &VmafScores) {
     let (rating, color) = if scores.mean >= 95.0 {
         ("Excellent", "\x1b[92m")
