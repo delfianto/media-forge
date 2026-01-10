@@ -72,8 +72,10 @@ impl Reporter {
     }
 
     /// Returns a clone of the sender for worker threads.
-    pub fn sender(&self) -> Sender<ReportRecord> {
-        self.tx.as_ref().expect("Reporter already finished").clone()
+    ///
+    /// Returns `None` if the reporter has already been finished.
+    pub fn sender(&self) -> Option<Sender<ReportRecord>> {
+        self.tx.as_ref().cloned()
     }
 
     /// Stops the reporter and waits for the writer thread to finish.
@@ -171,7 +173,9 @@ pub fn generate_conversion_report(
     };
 
     let reporter = Reporter::new(report_path);
-    let sender = reporter.sender();
+    let sender = reporter
+        .sender()
+        .ok_or_else(|| anyhow::anyhow!("Reporter was unexpectedly finished"))?;
     let pairs = collect_comparison_pairs(source, destination, format)?;
 
     if pairs.is_empty() {
@@ -321,7 +325,9 @@ fn collect_pairs_from_file(
         });
         pairs.push((source.to_path_buf(), destination.to_path_buf(), loader));
     } else if destination.is_dir() {
-        let file_name = source.file_name().unwrap();
+        let Some(file_name) = source.file_name() else {
+            return Ok(());
+        };
         let dest_file = destination.join(file_name).with_extension(format);
         if dest_file.exists() {
             let src_path_clone = source.to_path_buf();
@@ -389,7 +395,7 @@ mod tests {
         let path = file.path().to_path_buf();
 
         let reporter = Reporter::new(path.clone());
-        let sender = reporter.sender();
+        let sender = reporter.sender().unwrap();
 
         sender
             .send(ReportRecord::new(

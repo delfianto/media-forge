@@ -130,7 +130,7 @@ fn collect_video_tasks(
                             dest_path.to_path_buf()
                         } else {
                             dest_path
-                                .join(file.file_name().unwrap())
+                                .join(file.file_name().unwrap_or_default())
                                 .with_extension(&args.ext)
                         }
                     } else {
