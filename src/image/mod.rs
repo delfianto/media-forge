@@ -26,6 +26,42 @@ pub fn load_image(path: &Path) -> anyhow::Result<image::DynamicImage> {
     }
 }
 
+/// Holds aggregated results of a batch conversion process.
+pub struct ConversionSummary {
+    /// Total number of assets processed.
+    pub total: usize,
+    /// Number of successfully converted files.
+    pub succeeded: usize,
+    /// Number of files skipped (e.g., already exists).
+    pub skipped: usize,
+    /// List of paths and their associated error messages for failed conversions.
+    pub failed: Vec<(PathBuf, String)>,
+}
+
+impl ConversionSummary {
+    /// Prints a formatted summary of the conversion results to the console.
+    pub fn print_summary(&self) {
+        println!("\n{}", "=".repeat(50));
+        println!("Conversion Summary:");
+        println!("  Total Assets: {}", self.total);
+        println!("  ✓ Succeeded:  {}", self.succeeded);
+        println!("  → Skipped:    {}", self.skipped);
+
+        if !self.failed.is_empty() {
+            println!("  ✗ Failed:     {}", self.failed.len());
+            for (path, error) in &self.failed {
+                println!("    - {:?}: {}", path, error);
+            }
+        }
+        println!("{}\n", "=".repeat(50));
+    }
+
+    /// Returns a non-zero exit code if any conversions failed.
+    pub fn exit_code(&self) -> i32 {
+        if self.failed.is_empty() { 0 } else { 1 }
+    }
+}
+
 /// Unified error type for all image and archive operations.
 #[derive(Error, Debug)]
 pub enum ImageError {
@@ -75,6 +111,8 @@ pub enum ImageError {
 /// Convenience result type using ImageError.
 pub type Result<T> = std::result::Result<T, ImageError>;
 
+use crate::constants::{DEFAULT_AVIF_SPEED, DEFAULT_IMAGE_QUALITY, DEFAULT_RECURSION_DEPTH};
+
 /// Command-line arguments for image quality analysis (SSIMULACRA2).
 #[derive(ClapArgs, Debug, Clone)]
 pub struct QualityArgs {
@@ -107,15 +145,15 @@ pub struct ImageArgs {
     pub format: String,
 
     /// Compression quality level (0-100)
-    #[arg(short, long, default_value_t = 72, value_name = "0-100")]
+    #[arg(short, long, default_value_t = DEFAULT_IMAGE_QUALITY, value_name = "0-100")]
     pub quality: u8,
 
     /// AVIF encoding speed (0-10)
-    #[arg(long, default_value_t = 4, value_name = "0-10")]
+    #[arg(long, default_value_t = DEFAULT_AVIF_SPEED, value_name = "0-10")]
     pub speed: u8,
 
     /// Maximum directory recursion depth
-    #[arg(long, default_value_t = 2, value_name = "N")]
+    #[arg(long, default_value_t = DEFAULT_RECURSION_DEPTH, value_name = "N")]
     pub depth: usize,
 
     /// Number of parallel processing threads

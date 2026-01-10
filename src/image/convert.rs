@@ -1,15 +1,13 @@
-use crate::image::{ImageArgs, ImageError, Result, Task, TaskType};
+use crate::constants::{CHANNEL_BUFFER_MULTIPLIER, MAX_ANALYSIS_SPINNERS};
+use crate::image::{ConversionSummary, ImageArgs, ImageError, Result, Task, TaskType};
 use crate::walker::{Asset, MediaSource, Walker};
-use crate::{
-    CpuControl, IMAGE_EXTENSIONS, Naming, PathUtil, SHUTDOWN, VIDEO_EXTENSIONS,
-    ui,
-};
+use crate::{CpuControl, IMAGE_EXTENSIONS, Naming, PathUtil, SHUTDOWN, VIDEO_EXTENSIONS, ui};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use indicatif::{MultiProgress, ProgressBar};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -18,7 +16,7 @@ struct WorkItem {
     task: Task,
     pb_container: ProgressBar,
     pb_main: Arc<ProgressBar>,
-    complete_signal: Sender<()>,
+    complete_signal: Sender<Result<()>>,
 }
 
 /// Orchestrates the image conversion process.
@@ -30,10 +28,9 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     }
 
     let num_threads = CpuControl::get_thread_count(args.jobs);
-    rayon::ThreadPoolBuilder::new()
+    let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
-        .build_global()
-        .map_err(ImageError::from)?;
+        .build_global();
 
     println!("Running with {} threads", num_threads);
 
@@ -68,7 +65,7 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
         total_files
     );
 
-    process_tasks(
+    let summary = process_tasks(
         tasks_by_container,
         container_names,
         total_files,
@@ -76,8 +73,14 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
         num_threads,
     )?;
 
+    summary.print_summary();
+
     if args.report {
         crate::image::report::generate_conversion_report(&source_path, &dest_path, &args.format)?;
+    }
+
+    if summary.exit_code() != 0 {
+        return Err(anyhow::anyhow!("Some conversions failed"));
     }
 
     Ok(())
@@ -94,7 +97,7 @@ fn collect_tasks(
     let mp = MultiProgress::new();
 
     let mut analysis_spinners = Vec::new();
-    for _ in 0..num_threads.min(8) {
+    for _ in 0..num_threads.min(MAX_ANALYSIS_SPINNERS) {
         let pb = mp.insert(0, ProgressBar::new_spinner());
         pb.set_style(ui::analyzing_style());
         pb.set_message("Idle");
@@ -125,14 +128,14 @@ fn collect_tasks(
         .collect();
 
     {
-        let pool = spinner_pool.lock().unwrap();
+        let pool = spinner_pool
+            .lock()
+            .map_err(|_| ImageError::Io(std::io::Error::other("Lock poisoned")))?;
         for pb in pool.iter() {
             pb.finish_and_clear();
             mp.remove(pb);
         }
     }
-
-    pb_total.finish_and_clear();
 
     let mut tasks_by_container: HashMap<String, Vec<Task>> = HashMap::new();
     for task in all_tasks {
@@ -176,10 +179,7 @@ fn process_asset_for_tasks(
     total_files_counter: &std::sync::atomic::AtomicUsize,
     pb_total: &ProgressBar,
 ) -> Vec<Task> {
-    let pb_opt = {
-        let mut pool = spinner_pool.lock().unwrap();
-        pool.pop()
-    };
+    let pb_opt = spinner_pool.lock().ok().and_then(|mut pool| pool.pop());
 
     if let Some(ref pb) = pb_opt {
         let name = asset.path.file_name().unwrap_or_default().to_string_lossy();
@@ -213,8 +213,10 @@ fn process_asset_for_tasks(
         pb.disable_steady_tick();
     }
 
-    if let Some(pb) = pb_opt {
-        spinner_pool.lock().unwrap().push(pb);
+    if let Some(pb) = pb_opt
+        && let Ok(mut pool) = spinner_pool.lock()
+    {
+        pool.push(pb);
     }
 
     total_files_counter.fetch_add(generated_tasks.len(), Ordering::SeqCst);
@@ -241,9 +243,8 @@ fn generate_filesystem_tasks(
             if dest_path.extension().is_some() {
                 dest_path.to_path_buf()
             } else {
-                dest_path
-                    .join(path.file_name().unwrap())
-                    .with_extension(format)
+                let fname = path.file_name().unwrap_or_default();
+                dest_path.join(fname).with_extension(format)
             }
         } else {
             let rel_path = path.strip_prefix(source_path).unwrap_or(path);
@@ -260,7 +261,8 @@ fn generate_filesystem_tasks(
             if dest_path.extension().is_some() {
                 dest_path.to_path_buf()
             } else {
-                dest_path.join(path.file_name().unwrap())
+                let fname = path.file_name().unwrap_or_default();
+                dest_path.join(fname)
             }
         } else {
             let rel_path = path.strip_prefix(source_path).unwrap_or(path);
@@ -306,14 +308,14 @@ fn generate_archive_tasks(
     });
 }
 
-/// Executes conversion tasks with progress tracking.
+/// Executes conversion tasks with progress tracking and result aggregation.
 fn process_tasks(
     tasks_by_container: HashMap<String, Vec<Task>>,
     container_names: Vec<String>,
     total_files: usize,
     args: &ImageArgs,
     num_threads: usize,
-) -> Result<()> {
+) -> Result<ConversionSummary> {
     let mp = MultiProgress::new();
     let pb_main = mp.add(ProgressBar::new(total_files as u64));
     pb_main.set_style(ui::main_bar_style());
@@ -332,18 +334,27 @@ fn process_tasks(
     let args_arc = Arc::new(args.clone());
     let pb_main = Arc::new(pb_main);
 
-    let (tx, rx) = bounded::<WorkItem>(num_threads * 2);
+    let (tx, rx) = bounded::<WorkItem>(num_threads * CHANNEL_BUFFER_MULTIPLIER);
+    let (results_tx, results_rx) = unbounded::<(PathBuf, Result<()>)>();
 
     std::thread::scope(|s| {
         spawn_workers(s, rx, args_arc, spinner_pool.clone(), num_threads);
-        run_producer(tasks_by_container, container_names, tx, &mp, &pb_main);
+        run_producer(
+            tasks_by_container,
+            container_names,
+            tx,
+            &mp,
+            &pb_main,
+            results_tx,
+        );
     });
 
     {
-        let pool = spinner_pool.lock().unwrap();
-        for pb in pool.iter() {
-            pb.finish_and_clear();
-            mp.remove(pb);
+        if let Ok(pool) = spinner_pool.lock() {
+            for pb in pool.iter() {
+                pb.finish_and_clear();
+                mp.remove(pb);
+            }
         }
     }
 
@@ -351,7 +362,21 @@ fn process_tasks(
     let duration = start_instant.elapsed();
     println!("Completed in {:.2?}", duration);
 
-    Ok(())
+    let mut summary = ConversionSummary {
+        total: total_files,
+        succeeded: 0,
+        skipped: 0,
+        failed: Vec::new(),
+    };
+
+    while let Ok((path, res)) = results_rx.try_recv() {
+        match res {
+            Ok(()) => summary.succeeded += 1,
+            Err(e) => summary.failed.push((path, e.to_string())),
+        }
+    }
+
+    Ok(summary)
 }
 
 /// Spawns worker threads to process tasks from the receiver channel.
@@ -397,30 +422,30 @@ fn process_work_item(
 
     let name_display = Naming::truncate_from_start(&name, 30);
 
-    let pb_opt = {
-        let mut pool = spinner_pool.lock().unwrap();
-        pool.pop()
-    };
+    let pb_opt = spinner_pool.lock().ok().and_then(|mut pool| pool.pop());
 
     if let Some(spinner) = &pb_opt {
         spinner.set_message(format!("Processing: {}", name_display));
         spinner.enable_steady_tick(ui::SPINNER_TICK);
     }
 
-    if let Err(e) = process_single_task(&item, args) {
+    let result = process_single_task(&item, args);
+    if let Err(ref e) = result {
         eprintln!("Error processing {}: {}", name_display, e);
     }
 
-    if let Some(spinner) = pb_opt {
+    if let Some(spinner) = pb_opt
+        && let Ok(mut pool) = spinner_pool.lock()
+    {
         spinner.set_message("Idle");
         spinner.disable_steady_tick();
-        spinner_pool.lock().unwrap().push(spinner);
+        pool.push(spinner);
     }
 
     item.pb_container.inc(1);
     item.pb_main.inc(1);
 
-    let _ = item.complete_signal.send(());
+    let _ = item.complete_signal.send(result);
 }
 
 /// Orchestrates task distribution and handles container-level progress bars.
@@ -430,6 +455,7 @@ fn run_producer(
     tx: Sender<WorkItem>,
     mp: &MultiProgress,
     pb_main: &Arc<ProgressBar>,
+    results_tx: Sender<(PathBuf, Result<()>)>,
 ) {
     for container_name in container_names {
         if let Some(tasks) = tasks_by_container.get(&container_name) {
@@ -437,7 +463,7 @@ fn run_producer(
             pb_container.set_style(ui::sub_bar_style());
             pb_container.set_message(container_name.clone());
 
-            let (done_tx, done_rx) = unbounded();
+            let (done_tx, done_rx) = unbounded::<Result<()>>();
 
             for task in tasks {
                 if SHUTDOWN.load(Ordering::SeqCst) {
@@ -458,8 +484,10 @@ fn run_producer(
 
             drop(done_tx);
 
-            for _ in 0..tasks.len() {
-                if done_rx.recv().is_err() {
+            for task in tasks {
+                if let Ok(res) = done_rx.recv() {
+                    let _ = results_tx.send((task.src_path.clone(), res));
+                } else {
                     break;
                 }
             }

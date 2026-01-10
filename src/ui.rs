@@ -1,8 +1,9 @@
+use crate::constants::SPINNER_TICK_MS;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
 /// Tick rate for indeterminate spinners.
-pub const SPINNER_TICK: Duration = Duration::from_millis(100);
+pub const SPINNER_TICK: Duration = Duration::from_millis(SPINNER_TICK_MS);
 
 /// Returns the standard style for indeterminate spinners used during file scanning.
 pub fn scanner_style() -> ProgressStyle {
@@ -29,7 +30,7 @@ pub fn analyzing_style() -> ProgressStyle {
 pub fn main_bar_style() -> ProgressStyle {
     ProgressStyle::default_bar()
         .template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}"
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
         )
         .expect("Invalid template")
         .progress_chars("#>-based")

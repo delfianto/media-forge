@@ -132,7 +132,9 @@ fn calculate_vmaf(
         "-hwaccel_output_format",
         "cuda",
         "-i",
-        args.encoded.to_str().unwrap(),
+        args.encoded
+            .to_str()
+            .ok_or_else(|| VideoError::InvalidPath(args.encoded.clone()))?,
     ]);
 
     if args.start > 0 {
@@ -145,7 +147,9 @@ fn calculate_vmaf(
         "-hwaccel_output_format",
         "cuda",
         "-i",
-        args.original.to_str().unwrap(),
+        args.original
+            .to_str()
+            .ok_or_else(|| VideoError::InvalidPath(args.original.clone()))?,
     ]);
 
     cmd.args(["-lavfi", &filter_chain, "-f", "null", "-"]);

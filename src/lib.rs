@@ -5,11 +5,13 @@
 //! - CPU thread count management with sensible defaults
 //! - Filename utilities for display and cover image detection
 
+pub mod constants;
 pub mod image;
 pub mod ui;
 pub mod video;
 pub mod walker;
 
+use crate::constants::{DEFAULT_CPU_RATIO, MAX_CPU_RATIO};
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -102,12 +104,12 @@ pub struct CpuControl;
 impl CpuControl {
     /// Calculates the optimal thread count for parallel processing.
     ///
-    /// Defaults to 75% of available cores if no specific count is requested.
-    /// Clamps the result between 1 and 150% of available cores.
+    /// Defaults to a percentage of available cores if no specific count is requested.
+    /// Clamps the result between 1 and a maximum percentage of available cores.
     pub fn get_thread_count(requested: Option<usize>) -> usize {
         let total_cpus = num_cpus::get();
-        let default_threads = (total_cpus as f64 * 0.75).ceil() as usize;
-        let max_limit = (total_cpus as f64 * 1.5).ceil() as usize;
+        let default_threads = (total_cpus as f64 * DEFAULT_CPU_RATIO).ceil() as usize;
+        let max_limit = (total_cpus as f64 * MAX_CPU_RATIO).ceil() as usize;
 
         match requested {
             Some(req) => req.clamp(1, max_limit),
@@ -163,6 +165,7 @@ impl Naming {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_truncate_unicode() {
@@ -197,5 +200,38 @@ mod tests {
         assert!(Naming::is_cover_image("front_cover.webp"));
         assert!(Naming::is_cover_image("Folder.jpg"));
         assert!(!Naming::is_cover_image("page_005.jpg"));
+    }
+
+    #[test]
+    fn test_cpu_control_default() {
+        let count = CpuControl::get_thread_count(None);
+        assert!(count >= 1);
+        assert!(count <= (num_cpus::get() as f64 * MAX_CPU_RATIO).ceil() as usize);
+    }
+
+    #[test]
+    fn test_cpu_control_clamped() {
+        let count = CpuControl::get_thread_count(Some(9999));
+        let max = (num_cpus::get() as f64 * MAX_CPU_RATIO).ceil() as usize;
+        assert_eq!(count, max);
+
+        let count = CpuControl::get_thread_count(Some(0));
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_path_util_should_skip() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+
+        assert!(!PathUtil::should_skip(&file_path, false));
+
+        std::fs::write(&file_path, "content").unwrap();
+        assert!(PathUtil::should_skip(&file_path, false));
+        assert!(!PathUtil::should_skip(&file_path, true));
+
+        let empty_file = dir.path().join("empty.txt");
+        std::fs::write(&empty_file, "").unwrap();
+        assert!(!PathUtil::should_skip(&empty_file, false));
     }
 }
