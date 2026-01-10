@@ -72,6 +72,7 @@ pub enum ImageError {
     DimensionMismatch((u32, u32), (u32, u32)),
 }
 
+/// Convenience result type using ImageError.
 pub type Result<T> = std::result::Result<T, ImageError>;
 
 /// Command-line arguments for image quality analysis (SSIMULACRA2).
@@ -85,7 +86,7 @@ pub struct QualityArgs {
     #[arg(value_name = "DISTORTED")]
     pub distorted: PathBuf,
 
-    /// Target image format to look for in destination directory (if applicable)
+    /// Target image format to look for in destination directory
     #[arg(short, long, default_value = "avif", value_name = "FMT")]
     pub format: String,
 }

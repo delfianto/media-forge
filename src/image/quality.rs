@@ -10,7 +10,8 @@ use std::path::Path;
 pub fn run(args: QualityArgs) -> anyhow::Result<()> {
     println!("Comparing images using SSIMULACRA2...");
     println!("Original:  {}", args.original.display());
-    println!("Distorted: {}\n", args.distorted.display());
+    println!("Distorted: {}
+", args.distorted.display());
 
     let score = compute_quality(&args.original, &args.distorted)?;
     display_results(score);
@@ -74,6 +75,7 @@ pub fn compute_quality_from_image(
     Ok(score)
 }
 
+/// Converts a numerical SSIMULACRA2 score into a human-readable rating.
 pub fn get_rating(score: f64) -> String {
     if score >= 90.0 {
         "Excellent".to_string()
@@ -88,6 +90,7 @@ pub fn get_rating(score: f64) -> String {
     }
 }
 
+/// Prints the SSIMULACRA2 score and its corresponding rating to the console.
 fn display_results(score: f64) {
     let rating = get_rating(score);
     let color = match rating.as_str() {

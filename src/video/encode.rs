@@ -45,7 +45,7 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
 
     println!("Found {} videos to process.", tasks.len());
     if tasks.is_empty() {
-        return Ok(());
+        return Ok(())
     }
 
     process_video_tasks(tasks, args)?;
@@ -103,7 +103,6 @@ fn collect_video_tasks(
                     .unwrap_or_default();
                 pb_scan.set_message(name.to_string());
 
-                // Walker already filtered extensions, but we check metadata/skip logic
                 if let Ok(meta) = get_video_metadata(file)
                     && meta.codec != "av1"
                     && meta.duration > 0.0
@@ -132,7 +131,6 @@ fn collect_video_tasks(
                     }
                 }
             }
-            // We ignore archives for video encoding for now (ffmpeg doesn't read zip directly efficiently)
 
             pb_scan.inc(1);
         });
@@ -140,13 +138,14 @@ fn collect_video_tasks(
     pb_scan.finish_and_clear();
 
     let tasks = (Arc::try_unwrap(tasks_mutex)
-        .map_err(|_| VideoError::GpuError("Failed to unwrap task list".into()))?)
+        .map_err(|_| VideoError::GpuError("Failed to unwrap task list".into()))?) 
     .into_inner()
     .map_err(|_| VideoError::GpuError("Failed to unlock task list".into()))?;
 
     Ok(tasks)
 }
 
+/// Orchestrates the parallel execution of video encoding tasks.
 fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     let mp = MultiProgress::new();
     let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
@@ -190,6 +189,7 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     Ok(())
 }
 
+/// Spawns an FFmpeg process to convert a single video file and tracks its progress.
 fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result<()> {
     if let Some(parent) = task.dest.parent() {
         fs::create_dir_all(parent)?;
@@ -240,7 +240,7 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
     cmd.stderr(Stdio::piped());
 
     if SHUTDOWN.load(Ordering::SeqCst) {
-        return Ok(());
+        return Ok(())
     }
 
     let mut child = cmd.spawn()?;

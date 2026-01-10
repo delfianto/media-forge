@@ -58,9 +58,10 @@ pub enum VideoError {
     VmafFilterNotFound,
 }
 
+/// Convenience result type using VideoError.
 pub type Result<T> = std::result::Result<T, VideoError>;
 
-/// Cached regex for parsing FFmpeg progress output ('time=HH:MM:SS.ms').
+/// Cached regex for parsing FFmpeg progress output.
 pub static FFMPEG_PROGRESS_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"time=(\d+):(\d+):(\d+\.\d+)")
         .expect("FFmpeg progress regex is hardcoded and should always compile")
@@ -123,15 +124,15 @@ pub struct QualityArgs {
     #[arg(short, long, value_name = "FILE")]
     pub output: Option<PathBuf>,
 
-    /// Duration to analyze in seconds (default: 60s = 1m)
+    /// Duration to analyze in seconds
     #[arg(short, long, default_value_t = 60, value_name = "SECONDS")]
     pub duration: u64,
 
-    /// Start time for analysis in seconds (default: 0)
+    /// Start time for analysis in seconds
     #[arg(short, long, default_value_t = 0, value_name = "SECONDS")]
     pub start: u64,
 
-    /// Analyze entire video (ignores --duration)
+    /// Analyze entire video
     #[arg(long)]
     pub full: bool,
 
@@ -139,11 +140,11 @@ pub struct QualityArgs {
     #[arg(short, long, default_value_t = 0, value_name = "N")]
     pub threads: usize,
 
-    /// Analyze every Nth frame (1=all frames)
+    /// Analyze every Nth frame
     #[arg(long, default_value_t = 1, value_name = "N")]
     pub subsample: usize,
 
-    /// Downscale to height for faster analysis (default: 1080)
+    /// Downscale to height for faster analysis
     #[arg(long, default_value = "1080", value_parser = ["480", "720", "1080"], value_name = "HEIGHT")]
     pub scale: String,
 }
@@ -152,7 +153,7 @@ pub struct QualityArgs {
 pub struct VideoMeta {
     /// Duration in seconds.
     pub duration: f64,
-    /// Name of the video codec (e.g., "h264", "av1").
+    /// Name of the video codec.
     pub codec: String,
     /// Video width in pixels.
     pub width: u32,

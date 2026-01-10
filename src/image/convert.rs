@@ -319,7 +319,6 @@ fn process_tasks(
     pb_main.set_style(ui::main_bar_style());
     pb_main.set_message("Total Progress");
 
-    // Worker spinners
     let mut spinners = Vec::new();
     for _ in 0..num_threads {
         let pb = mp.add(ProgressBar::new_spinner());
@@ -333,7 +332,6 @@ fn process_tasks(
     let args_arc = Arc::new(args.clone());
     let pb_main = Arc::new(pb_main);
 
-    // Channel for distributing work (bounded to limit memory usage)
     let (tx, rx) = bounded::<WorkItem>(num_threads * 2);
 
     std::thread::scope(|s| {
@@ -356,6 +354,7 @@ fn process_tasks(
     Ok(())
 }
 
+/// Spawns worker threads to process tasks from the receiver channel.
 fn spawn_workers<'a>(
     scope: &'a std::thread::Scope<'a, '_>,
     rx: Receiver<WorkItem>,
@@ -380,6 +379,7 @@ fn spawn_workers<'a>(
     }
 }
 
+/// Processes a single work item, updating progress bars and handling task execution.
 fn process_work_item(
     item: WorkItem,
     args: &ImageArgs,
@@ -423,6 +423,7 @@ fn process_work_item(
     let _ = item.complete_signal.send(());
 }
 
+/// Orchestrates task distribution and handles container-level progress bars.
 fn run_producer(
     tasks_by_container: HashMap<String, Vec<Task>>,
     container_names: Vec<String>,

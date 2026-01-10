@@ -71,8 +71,8 @@ enum Commands {
     Quality(video::QualityArgs),
 }
 
+/// Parses command-line arguments and routes execution to the appropriate subcommand.
 fn main() -> Result<()> {
-    // Set up Ctrl-C handler to kill child processes and shutdown gracefully
     ctrlc::set_handler(move || {
         eprintln!("\n\x1b[31m[Interrupt] Shutting down and cleaning up child processes...\x1b[0m");
         ProcessManager::kill_all();

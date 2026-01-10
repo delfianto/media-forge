@@ -77,7 +77,7 @@ impl Reporter {
 
     /// Stops the reporter and waits for the writer thread to finish.
     pub fn finish(mut self) {
-        drop(self.tx.take()); // Close the channel
+        drop(self.tx.take());
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
@@ -95,6 +95,7 @@ impl Reporter {
         }
     }
 
+    /// Consumes report records from the receiver and writes them to a CSV file.
     fn run_writer(rx: Receiver<ReportRecord>, path: PathBuf) {
         let file = match fs::File::create(&path) {
             Ok(f) => f,
@@ -113,8 +114,8 @@ impl Reporter {
         let _ = wtr.flush();
     }
 
+    /// Reads the generated CSV report and calculates cumulative statistics.
     fn generate_summary(&self) -> anyhow::Result<ReportSummary> {
-        // Read the CSV back to generate a summary
         let file = fs::File::open(&self.path)?;
         let mut rdr = csv::Reader::from_reader(file);
 
@@ -144,6 +145,7 @@ impl Reporter {
     }
 }
 
+/// Holds aggregated statistics for the conversion process.
 #[derive(Default)]
 struct ReportSummary {
     space_saved_mb: f64,
@@ -213,21 +215,25 @@ pub fn generate_conversion_report(
             if let Err(e) = result {
                 eprintln!(
                     "Error analyzing pair {:?} -> {:?}: {}",
-                    src_path, dest_path, e
+                    src_path,
+                    dest_path,
+                    e
                 );
             }
             pb.inc(1);
         });
 
     pb.finish_with_message("Analysis Complete");
-    drop(sender); // Close the channel from this side to allow reporter to finish
+    drop(sender);
     reporter.finish();
 
     Ok(())
 }
 
+/// Type alias for a closure that loads image data and returns its size.
 type DataLoader = Box<dyn Fn() -> anyhow::Result<(image::DynamicImage, u64)> + Sync + Send>;
 
+/// Identifies pairs of original and converted files for quality comparison.
 fn collect_comparison_pairs(
     source: &Path,
     destination: &Path,
@@ -251,6 +257,7 @@ fn collect_comparison_pairs(
     Ok(pairs)
 }
 
+/// Scans an archive and matches its internal images with converted files in the destination.
 fn collect_pairs_from_archive(
     source: &Path,
     destination: &Path,
@@ -259,7 +266,7 @@ fn collect_pairs_from_archive(
 ) -> anyhow::Result<()> {
     if !destination.is_dir() {
         println!("Warning: Source is Archive but Destination is File. Cannot compare.");
-        return Ok(());
+        return Ok(())
     }
 
     let file = fs::File::open(source)?;
@@ -298,6 +305,7 @@ fn collect_pairs_from_archive(
     Ok(())
 }
 
+/// Matches a single source file with its converted counterpart.
 fn collect_pairs_from_file(
     source: &Path,
     destination: &Path,
@@ -330,6 +338,7 @@ fn collect_pairs_from_file(
     Ok(())
 }
 
+/// Recursively scans a directory to find pairs of original and converted images.
 fn collect_pairs_from_directory(
     source: &Path,
     destination: &Path,
@@ -338,7 +347,7 @@ fn collect_pairs_from_directory(
 ) -> anyhow::Result<()> {
     if !destination.is_dir() {
         println!("Warning: Source is Directory but Destination is File. Cannot compare.");
-        return Ok(());
+        return Ok(())
     }
 
     for entry in WalkDir::new(source) {
