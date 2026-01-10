@@ -145,38 +145,50 @@ impl Walker {
             return true;
         }
 
-        if (ext == "zip" || ext == "cbz")
-            && let Ok(file) = fs::File::open(path)
-            && let Ok(mut archive) = ZipArchive::new(file)
-        {
-            let mut added = false;
-            for i in 0..archive.len() {
-                if let Ok(file) = archive.by_index(i)
-                    && file.is_file()
-                {
-                    let name = file.name().to_string();
-                    let entry_path = Path::new(&name);
-                    let entry_ext = entry_path
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-
-                    if self.extensions.contains(&entry_ext) {
-                        assets.push(Asset {
-                            path: path.to_path_buf(),
-                            source: MediaSource::Archive {
-                                archive_path: path.to_path_buf(),
-                                entry_name: name,
-                            },
-                        });
-                        added = true;
-                    }
-                }
-            }
-            return added;
+        if ext == "zip" || ext == "cbz" {
+            return self.scan_archive(path, assets);
         }
         false
+    }
+
+    /// Inspects a supported archive (zip/cbz) and adds its contents as assets if they match target extensions.
+    fn scan_archive(&self, path: &Path, assets: &mut Vec<Asset>) -> bool {
+        let file = match fs::File::open(path) {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+
+        let mut archive = match ZipArchive::new(file) {
+            Ok(a) => a,
+            Err(_) => return false,
+        };
+
+        let mut added = false;
+        for i in 0..archive.len() {
+            if let Ok(file) = archive.by_index(i)
+                && file.is_file()
+            {
+                let name = file.name().to_string();
+                let entry_path = Path::new(&name);
+                let entry_ext = entry_path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                if self.extensions.contains(&entry_ext) {
+                    assets.push(Asset {
+                        path: path.to_path_buf(),
+                        source: MediaSource::Archive {
+                            archive_path: path.to_path_buf(),
+                            entry_name: name,
+                        },
+                    });
+                    added = true;
+                }
+            }
+        }
+        added
     }
 }
 
@@ -190,12 +202,12 @@ mod tests {
 
     #[test]
     fn test_walker_scan_flat() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("Failed to create temp dir");
         let root = dir.path();
 
-        File::create(root.join("test1.jpg")).unwrap();
-        File::create(root.join("test2.png")).unwrap();
-        File::create(root.join("other.txt")).unwrap();
+        File::create(root.join("test1.jpg")).expect("Failed to create test file");
+        File::create(root.join("test2.png")).expect("Failed to create test file");
+        File::create(root.join("other.txt")).expect("Failed to create test file");
 
         let walker = Walker::new(&["jpg", "png"], 1, false);
         let assets = walker.scan_flat(root);
@@ -203,7 +215,8 @@ mod tests {
         assert_eq!(assets.len(), 2);
         let paths: Vec<_> = assets
             .iter()
-            .map(|a| a.path.file_name().unwrap().to_str().unwrap())
+            .filter_map(|a| a.path.file_name())
+            .filter_map(|n| n.to_str())
             .collect();
         assert!(paths.contains(&"test1.jpg"));
         assert!(paths.contains(&"test2.png"));
@@ -211,13 +224,13 @@ mod tests {
 
     #[test]
     fn test_walker_recursive() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("Failed to create temp dir");
         let root = dir.path();
         let sub = root.join("sub");
-        std::fs::create_dir(&sub).unwrap();
+        std::fs::create_dir(&sub).expect("Failed to create sub dir");
 
-        File::create(root.join("root.jpg")).unwrap();
-        File::create(sub.join("sub.jpg")).unwrap();
+        File::create(root.join("root.jpg")).expect("Failed to create test file");
+        File::create(sub.join("sub.jpg")).expect("Failed to create test file");
 
         let walker = Walker::new(&["jpg"], 2, true);
         let assets = walker.scan_flat(root);
@@ -230,20 +243,23 @@ mod tests {
 
     #[test]
     fn test_walker_archive_inspection() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("Failed to create temp dir");
         let root = dir.path();
         let zip_path = root.join("test.cbz");
 
-        let file = File::create(&zip_path).unwrap();
+        let file = File::create(&zip_path).expect("Failed to create test file");
         let mut zip = zip::ZipWriter::new(file);
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
-        zip.start_file("img1.jpg", options).unwrap();
-        zip.write_all(b"fake data").unwrap();
-        zip.start_file("notes.txt", options).unwrap();
-        zip.write_all(b"text").unwrap();
-        zip.finish().unwrap();
+        zip.start_file("img1.jpg", options)
+            .expect("Failed to start file in zip");
+        zip.write_all(b"fake data")
+            .expect("Failed to write data to zip");
+        zip.start_file("notes.txt", options)
+            .expect("Failed to start file in zip");
+        zip.write_all(b"text").expect("Failed to write data to zip");
+        zip.finish().expect("Failed to finish zip");
 
         let walker = Walker::new(&["jpg"], 1, false);
         let assets = walker.scan_flat(root);
@@ -264,22 +280,22 @@ mod tests {
 
     #[test]
     fn test_scan_grouped() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("Failed to create temp dir");
         let root = dir.path();
         let sub1 = root.join("sub1");
         let sub2 = root.join("sub2");
-        std::fs::create_dir(&sub1).unwrap();
-        std::fs::create_dir(&sub2).unwrap();
+        std::fs::create_dir(&sub1).expect("Failed to create sub dir");
+        std::fs::create_dir(&sub2).expect("Failed to create sub dir");
 
-        File::create(sub1.join("a.jpg")).unwrap();
-        File::create(sub1.join("b.jpg")).unwrap();
-        File::create(sub2.join("c.jpg")).unwrap();
+        File::create(sub1.join("a.jpg")).expect("Failed to create test file");
+        File::create(sub1.join("b.jpg")).expect("Failed to create test file");
+        File::create(sub2.join("c.jpg")).expect("Failed to create test file");
 
         let walker = Walker::new(&["jpg"], 2, true);
         let groups = walker.scan_grouped(root);
 
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups.get(&sub1).unwrap().len(), 2);
-        assert_eq!(groups.get(&sub2).unwrap().len(), 1);
+        assert_eq!(groups.get(&sub1).expect("Sub1 group not found").len(), 2);
+        assert_eq!(groups.get(&sub2).expect("Sub2 group not found").len(), 1);
     }
 }

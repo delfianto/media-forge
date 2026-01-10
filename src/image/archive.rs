@@ -4,12 +4,13 @@ use rayon::prelude::*;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use zip::write::SimpleFileOptions;
 
-use crate::image::{ArchiveArgs, ImageError, Result};
+use crate::image::{ArchiveArgs, ArchiveSummary, ImageError, Result};
 
 /// Represents a single directory to be archived into a CBZ file.
+#[derive(Debug, Clone)]
 struct ArchiveTask {
     /// Path to the source directory containing images.
     src_dir: PathBuf,
@@ -44,8 +45,6 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
     let mut items_found = 0;
 
     let tasks = if source_path.is_file() || (!args.recursive && source_path.is_dir()) {
-        // Direct archiving of a single folder (non-recursive) or handling a single file
-        // find_image_folders will handle checking for images
         let mut t = Vec::new();
         find_image_folders(
             &source_path,
@@ -87,7 +86,19 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    execute_archive_tasks(tasks, Arc::new(args), num_threads)?;
+    let failed = execute_archive_tasks(tasks.clone(), Arc::new(args), num_threads)?;
+
+    let summary = ArchiveSummary {
+        total: tasks.len(),
+        succeeded: tasks.len() - failed.len(),
+        failed,
+    };
+
+    summary.print_summary();
+
+    if summary.exit_code() != 0 {
+        return Err(anyhow::anyhow!("Some archivals failed"));
+    }
 
     Ok(())
 }
@@ -236,7 +247,7 @@ fn execute_archive_tasks(
     tasks: Vec<ArchiveTask>,
     args: Arc<ArchiveArgs>,
     num_threads: usize,
-) -> Result<()> {
+) -> Result<Vec<(PathBuf, String)>> {
     println!(
         "Archiving {} folders with {} threads...",
         tasks.len(),
@@ -248,6 +259,7 @@ fn execute_archive_tasks(
     pb_main.set_style(ui::main_bar_style());
 
     let pb_main = Arc::new(pb_main);
+    let failures: Arc<Mutex<Vec<(PathBuf, String)>>> = Arc::new(Mutex::new(Vec::new()));
 
     tasks.par_iter().for_each(|task| {
         let pb_inner = mp.add(ProgressBar::new_spinner());
@@ -259,6 +271,9 @@ fn execute_archive_tasks(
 
         if let Err(e) = create_cbz(task, &args) {
             eprintln!("Error archiving {:?}: {}", task.src_dir, e);
+            if let Ok(mut f) = failures.lock() {
+                f.push((task.src_dir.clone(), e.to_string()));
+            }
         }
 
         mp.remove(&pb_inner);
@@ -266,7 +281,13 @@ fn execute_archive_tasks(
     });
 
     pb_main.finish_with_message("Done!");
-    Ok(())
+
+    let f = Arc::try_unwrap(failures)
+        .map_err(|_| ImageError::Io(std::io::Error::other("Failed to unwrap failures")))?
+        .into_inner()
+        .map_err(|_| ImageError::Io(std::io::Error::other("Failed to unlock failures")))?;
+
+    Ok(f)
 }
 
 /// Creates a single CBZ archive from a folder of images.

@@ -10,6 +10,42 @@ pub mod builder;
 pub mod encode;
 pub mod quality;
 
+/// Holds aggregated results of a video encoding process.
+pub struct VideoSummary {
+    /// Total number of videos identified for processing.
+    pub total: usize,
+    /// Number of successfully encoded videos.
+    pub succeeded: usize,
+    /// Number of videos skipped.
+    pub skipped: usize,
+    /// List of source paths and error messages for failed encodings.
+    pub failed: Vec<(PathBuf, String)>,
+}
+
+impl VideoSummary {
+    /// Prints a formatted summary of the video encoding results to the console.
+    pub fn print_summary(&self) {
+        println!("\n{}", "=".repeat(50));
+        println!("Video Encoding Summary:");
+        println!("  Total Videos: {}", self.total);
+        println!("  ✓ Succeeded:  {}", self.succeeded);
+        println!("  → Skipped:    {}", self.skipped);
+
+        if !self.failed.is_empty() {
+            println!("  ✗ Failed:     {}", self.failed.len());
+            for (path, error) in &self.failed {
+                println!("    - {:?}: {}", path, error);
+            }
+        }
+        println!("{}\n", "=".repeat(50));
+    }
+
+    /// Returns a non-zero exit code if any encodings failed.
+    pub fn exit_code(&self) -> i32 {
+        if self.failed.is_empty() { 0 } else { 1 }
+    }
+}
+
 /// Video processing errors with context-specific information.
 #[derive(Error, Debug)]
 pub enum VideoError {
