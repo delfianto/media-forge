@@ -1,10 +1,10 @@
 use crate::image::{ImageArgs, ImageError, Result, Task, TaskType};
 use crate::walker::{Asset, MediaSource, Walker};
 use crate::{
-    ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, Naming, PathUtil, SHUTDOWN, VIDEO_EXTENSIONS,
+    CpuControl, IMAGE_EXTENSIONS, Naming, PathUtil, SHUTDOWN, VIDEO_EXTENSIONS,
     ui,
 };
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use indicatif::{MultiProgress, ProgressBar};
 use std::collections::HashMap;
@@ -42,7 +42,6 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
 
     let mut extensions = Vec::new();
     extensions.extend_from_slice(IMAGE_EXTENSIONS);
-    extensions.extend_from_slice(ARCHIVE_EXTENSIONS);
     extensions.extend_from_slice(VIDEO_EXTENSIONS);
 
     let walker = Walker::new(&extensions, args.depth, true);
@@ -437,7 +436,7 @@ fn run_producer(
             pb_container.set_style(ui::sub_bar_style());
             pb_container.set_message(container_name.clone());
 
-            let (done_tx, done_rx) = bounded(0);
+            let (done_tx, done_rx) = unbounded();
 
             for task in tasks {
                 if SHUTDOWN.load(Ordering::SeqCst) {
