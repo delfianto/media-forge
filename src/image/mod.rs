@@ -62,6 +62,39 @@ impl ConversionSummary {
     }
 }
 
+/// Holds aggregated results of an archive creation process.
+pub struct ArchiveSummary {
+    /// Total number of folders identified for archiving.
+    pub total: usize,
+    /// Number of successfully created archives.
+    pub succeeded: usize,
+    /// List of source directory paths and error messages for failed archivals.
+    pub failed: Vec<(PathBuf, String)>,
+}
+
+impl ArchiveSummary {
+    /// Prints a formatted summary of the archival results to the console.
+    pub fn print_summary(&self) {
+        println!("\n{}", "=".repeat(50));
+        println!("Archival Summary:");
+        println!("  Total Folders: {}", self.total);
+        println!("  ✓ Succeeded:   {}", self.succeeded);
+
+        if !self.failed.is_empty() {
+            println!("  ✗ Failed:      {}", self.failed.len());
+            for (path, error) in &self.failed {
+                println!("    - {:?}: {}", path, error);
+            }
+        }
+        println!("{}\n", "=".repeat(50));
+    }
+
+    /// Returns a non-zero exit code if any archivals failed.
+    pub fn exit_code(&self) -> i32 {
+        if self.failed.is_empty() { 0 } else { 1 }
+    }
+}
+
 /// Unified error type for all image and archive operations.
 #[derive(Error, Debug)]
 pub enum ImageError {
