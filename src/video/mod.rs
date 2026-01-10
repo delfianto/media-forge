@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
 
+pub mod builder;
 pub mod encode;
 pub mod quality;
 
@@ -73,6 +74,8 @@ pub static VMAF_SCORE_RE: Lazy<Regex> = Lazy::new(|| {
         .expect("VMAF score regex is hardcoded and should always compile")
 });
 
+use crate::constants::{DEFAULT_RECURSION_DEPTH, DEFAULT_VIDEO_CQ, DEFAULT_VMAF_DURATION};
+
 /// Command-line arguments for video encoding.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct VideoArgs {
@@ -85,7 +88,7 @@ pub struct VideoArgs {
     pub source: PathBuf,
 
     /// Constant quality level (1-51)
-    #[arg(long, default_value_t = 28, value_name = "1-51")]
+    #[arg(long, default_value_t = DEFAULT_VIDEO_CQ, value_name = "1-51")]
     pub cq: u8,
 
     /// NVIDIA NVENC encoding preset (p1-p7)
@@ -101,7 +104,7 @@ pub struct VideoArgs {
     pub ext: String,
 
     /// Maximum directory recursion depth
-    #[arg(long, default_value_t = 2, value_name = "N")]
+    #[arg(long, default_value_t = DEFAULT_RECURSION_DEPTH, value_name = "N")]
     pub depth: usize,
 
     /// Overwrite existing files even if they are not empty
@@ -125,7 +128,7 @@ pub struct QualityArgs {
     pub output: Option<PathBuf>,
 
     /// Duration to analyze in seconds
-    #[arg(short, long, default_value_t = 60, value_name = "SECONDS")]
+    #[arg(short, long, default_value_t = DEFAULT_VMAF_DURATION, value_name = "SECONDS")]
     pub duration: u64,
 
     /// Start time for analysis in seconds
@@ -228,4 +231,31 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
 /// Delegates quality analysis to the internal module.
 pub fn run_quality(args: QualityArgs) -> anyhow::Result<()> {
     quality::run_quality(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ffmpeg_progress_regex() {
+        let line = "frame=  123 fps= 12 q=-0.0 size=    1234kB time=00:01:23.45 bitrate= 123.4kbits/s speed=1.23x";
+        let caps = FFMPEG_PROGRESS_RE.captures(line).unwrap();
+        assert_eq!(&caps[1], "00");
+        assert_eq!(&caps[2], "01");
+        assert_eq!(&caps[3], "23.45");
+    }
+
+    #[test]
+    fn test_vmaf_score_regex() {
+        let line1 = "VMAF score: 95.123456";
+        let caps1 = VMAF_SCORE_RE.captures(line1).unwrap();
+        assert_eq!(&caps1[1], "95.123456");
+
+        let line2 = "VMAF score: mean: 92.500000 min: 80.100000 max: 99.000000";
+        let caps2 = VMAF_SCORE_RE.captures(line2).unwrap();
+        assert_eq!(&caps2[2], "92.500000");
+        assert_eq!(&caps2[3], "80.100000");
+        assert_eq!(&caps2[4], "99.000000");
+    }
 }
