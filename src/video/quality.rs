@@ -1,5 +1,5 @@
-use crate::{ProcessManager, SHUTDOWN};
-use indicatif::{ProgressBar, ProgressStyle};
+use crate::{ProcessManager, SHUTDOWN, ui};
+use indicatif::ProgressBar;
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
@@ -9,12 +9,20 @@ use crate::video::{
     get_video_metadata,
 };
 
+/// Stores the calculated VMAF scores.
 pub struct VmafScores {
+    /// The mean VMAF score over the analyzed duration.
     pub mean: f64,
+    /// The minimum VMAF score observed.
     pub min: Option<f64>,
+    /// The maximum VMAF score observed.
     pub max: Option<f64>,
 }
 
+/// Executes the video quality analysis process using VMAF.
+///
+/// This function verifies dependencies, validates inputs, computes the VMAF score
+/// using FFmpeg with hardware acceleration if available, and displays the results.
 pub fn run_quality(args: QualityArgs) -> anyhow::Result<()> {
     check_vmaf_requirements()?;
 
@@ -42,11 +50,7 @@ pub fn run_quality(args: QualityArgs) -> anyhow::Result<()> {
     println!("{}\n", "=".repeat(50));
 
     let pb = ProgressBar::new(analysis_duration as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} VMAF Analysis: [{bar:40.cyan/blue}] {pos}/{len}s ({eta})")? // Corrected: Removed unnecessary escaping of '{' and '}'
-            .progress_chars("#>- "),
-    );
+    pb.set_style(ui::main_bar_style());
 
     let vmaf_scores = calculate_vmaf(&args, &meta, analysis_duration, &pb)?;
     pb.finish_and_clear();

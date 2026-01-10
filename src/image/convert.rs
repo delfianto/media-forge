@@ -1,9 +1,13 @@
+use crate::image::quality::{compute_quality_from_image, get_rating};
+use crate::image::report::{ReportRecord, Reporter};
+use crate::image::{ImageArgs, ImageError, Result, Task, TaskType};
 use crate::{
-    ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, Naming, SHUTDOWN, Scanner, VIDEO_EXTENSIONS,
+    ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, Naming, PathUtil, SHUTDOWN, Scanner,
+    VIDEO_EXTENSIONS, ui,
 };
+use crossbeam_channel::{Sender, bounded};
 use image::{DynamicImage, GenericImageView, ImageFormat};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rayon::prelude::*;
+use indicatif::{MultiProgress, ProgressBar};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +15,13 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::image::{ImageArgs, ImageError, Result, Task, TaskType};
+struct WorkItem {
+    task: Task,
+    pb_container: ProgressBar,
+    pb_main: Arc<ProgressBar>,
+    complete_signal: Sender<()>,
+    report_tx: Option<Sender<ReportRecord>>,
+}
 
 /// Orchestrates the image conversion process.
 pub fn run(args: ImageArgs) -> anyhow::Result<()> {
@@ -29,48 +39,15 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
 
     println!("Running with {} threads", num_threads);
 
-    let source_path = fs::canonicalize(&args.source)
-        .map_err(|e| ImageError::CanonicalizationError(args.source.clone(), e))?;
-
-    if !source_path.exists() {
-        return Err(ImageError::SourceNotFound(source_path).into());
-    }
-
-    let dest_path = if args.destination.is_absolute() {
-        args.destination.clone()
-    } else {
-        std::env::current_dir()
-            .map_err(|_| ImageError::NoCurrentDir)?
-            .join(&args.destination)
-    };
+    let (source_path, dest_path) = PathUtil::resolve_paths(&args.source, &args.destination)
+        .map_err(|_| ImageError::SourceNotFound(args.source.clone()))?;
 
     let scanner = Scanner::new(args.depth);
     let files = if source_path.is_file() {
         vec![source_path.clone()]
     } else {
         println!("Scanning {}...", source_path.display());
-        let pb_scan = ProgressBar::new_spinner();
-        pb_scan.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} {msg} {pos} items found")
-                .unwrap(),
-        );
-        pb_scan.enable_steady_tick(std::time::Duration::from_millis(100));
-
-        let mut files_found = 0;
-        let f = scanner.scan_with_callback(&source_path, |path| {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default();
-            if path.is_file() {
-                files_found += 1;
-                pb_scan.set_position(files_found);
-            }
-            pb_scan.set_message(format!("Scanning: {}", name));
-        });
-        pb_scan.finish_and_clear();
-        f
+        scanner.scan_with_progress(&source_path, "Scanning...")
     };
 
     let (tasks_by_container, total_files) =
@@ -113,25 +90,18 @@ fn collect_tasks(
     let mut analysis_spinners = Vec::new();
     for _ in 0..num_threads.min(8) {
         let pb = mp.insert(0, ProgressBar::new_spinner());
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.blue} Analyzing: {msg}")
-                .unwrap(),
-        );
+        pb.set_style(ui::analyzing_style());
         pb.set_message("Idle");
         analysis_spinners.push(pb);
     }
     let spinner_pool = Arc::new(Mutex::new(analysis_spinners));
 
     let pb_total = mp.add(ProgressBar::new(files.len() as u64));
-    pb_total.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} Total Analysis: [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-            .unwrap(),
-    );
+    pb_total.set_style(ui::main_bar_style());
 
     let total_files_counter = std::sync::atomic::AtomicUsize::new(0);
 
+    use rayon::prelude::*;
     let all_tasks: Vec<Task> = files
         .par_iter()
         .map(|file| {
@@ -154,7 +124,7 @@ fn collect_tasks(
             let tasks = if ARCHIVE_EXTENSIONS.contains(&ext.as_str()) {
                 if let Some(ref pb) = pb_opt {
                     pb.set_message(name.to_string());
-                    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+                    pb.enable_steady_tick(ui::SPINNER_TICK);
                 }
 
                 let t =
@@ -209,7 +179,7 @@ fn collect_tasks(
                 spinner_pool.lock().unwrap().push(pb);
             }
 
-            total_files_counter.fetch_add(tasks.len(), std::sync::atomic::Ordering::SeqCst);
+            total_files_counter.fetch_add(tasks.len(), Ordering::SeqCst);
             pb_total.inc(1);
             tasks
         })
@@ -250,7 +220,7 @@ fn collect_tasks(
             .push(task);
     }
 
-    let total_files = total_files_counter.load(std::sync::atomic::Ordering::SeqCst);
+    let total_files = total_files_counter.load(Ordering::SeqCst);
     Ok((tasks_by_container, total_files))
 }
 
@@ -309,21 +279,14 @@ fn process_tasks(
 ) -> Result<()> {
     let mp = MultiProgress::new();
     let pb_main = mp.add(ProgressBar::new(total_files as u64));
-    pb_main.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")?
-            .progress_chars("#>-"),
-    );
+    pb_main.set_style(ui::main_bar_style());
     pb_main.set_message("Total Progress");
 
+    // Worker spinners
     let mut spinners = Vec::new();
     for _ in 0..num_threads {
         let pb = mp.add(ProgressBar::new_spinner());
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.blue} {msg}")
-                .unwrap(),
-        );
+        pb.set_style(ui::generic_spinner_style());
         pb.set_message("Idle");
         spinners.push(pb);
     }
@@ -333,62 +296,122 @@ fn process_tasks(
     let args = Arc::new(args);
     let pb_main = Arc::new(pb_main);
 
-    for container_name in container_names {
-        if let Some(tasks) = tasks_by_container.get(&container_name) {
-            let pb_container = mp.add(ProgressBar::new(tasks.len() as u64));
+    // Channel for distributing work
+    let (tx, rx) = bounded::<WorkItem>(num_threads * 2);
 
-            pb_container.set_style(
-                ProgressStyle::default_bar()
-                    .template("  {bar:20.magenta} {pos}/{len} {msg}")
-                    .unwrap()
-                    .progress_chars("=>-"),
-            );
-            pb_container.set_message(container_name.clone());
+    // Reporting
+    let should_report = !args.no_report;
+    let reporter = if should_report {
+        Some(Reporter::new(args.report_path.clone()))
+    } else {
+        None
+    };
 
-            tasks.par_iter().for_each(|task| {
-                if SHUTDOWN.load(Ordering::SeqCst) {
-                    return;
-                }
+    std::thread::scope(|s| {
+        // Spawn workers
+        for _ in 0..num_threads {
+            let rx = rx.clone();
+            let args = args.clone();
+            let spinner_pool = spinner_pool.clone();
 
-                let name = match &task.task_type {
-                    TaskType::File | TaskType::Copy => task
-                        .src_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    TaskType::Archive { internal_path } => internal_path.clone(),
-                };
-
-                let name_display = Naming::truncate_from_start(&name, 30);
-
-                let pb_opt = {
-                    let mut pool = spinner_pool.lock().unwrap();
-                    pool.pop()
-                };
-
-                if let Some(spinner) = pb_opt {
-                    spinner.set_message(format!("Processing: {}", name_display));
-                    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-
-                    if let Err(e) = process_single_task(task, &args) {
-                        mp.suspend(|| eprintln!("Error processing {}: {}", name_display, e));
+            s.spawn(move || {
+                while let Ok(item) = rx.recv() {
+                    if SHUTDOWN.load(Ordering::SeqCst) {
+                        return;
                     }
 
-                    spinner.set_message("Idle");
-                    spinner.disable_steady_tick();
+                    let name = match &item.task.task_type {
+                        TaskType::File | TaskType::Copy => item
+                            .task
+                            .src_path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        TaskType::Archive { internal_path } => internal_path.clone(),
+                    };
 
-                    spinner_pool.lock().unwrap().push(spinner);
-                } else if let Err(e) = process_single_task(task, &args) {
-                    mp.suspend(|| eprintln!("Error processing {}: {}", name_display, e));
+                    let name_display = Naming::truncate_from_start(&name, 30);
+
+                    // Acquire spinner
+                    let pb_opt = {
+                        let mut pool = spinner_pool.lock().unwrap();
+                        pool.pop()
+                    };
+
+                    if let Some(spinner) = &pb_opt {
+                        spinner.set_message(format!("Processing: {}", name_display));
+                        spinner.enable_steady_tick(ui::SPINNER_TICK);
+                    }
+
+                    // Process
+                    if let Err(e) = process_single_task(&item, &args) {
+                        eprintln!("Error processing {}: {}", name_display, e);
+                    }
+
+                    // Release spinner
+                    if let Some(spinner) = pb_opt {
+                        spinner.set_message("Idle");
+                        spinner.disable_steady_tick();
+                        spinner_pool.lock().unwrap().push(spinner);
+                    }
+
+                    item.pb_container.inc(1);
+                    item.pb_main.inc(1);
+
+                    // Signal completion
+                    let _ = item.complete_signal.send(());
+                }
+            });
+        }
+
+        // Producer loop
+        for container_name in container_names {
+            if let Some(tasks) = tasks_by_container.get(&container_name) {
+                let pb_container = mp.add(ProgressBar::new(tasks.len() as u64));
+                pb_container.set_style(ui::sub_bar_style());
+                pb_container.set_message(container_name.clone());
+
+                let (done_tx, done_rx) = bounded(0);
+
+                for task in tasks {
+                    if SHUTDOWN.load(Ordering::SeqCst) {
+                        break;
+                    }
+
+                    let item = WorkItem {
+                        task: task.clone(),
+                        pb_container: pb_container.clone(),
+                        pb_main: pb_main.clone(),
+                        complete_signal: done_tx.clone(),
+                        report_tx: reporter.as_ref().map(|r| r.sender()),
+                    };
+
+                    if tx.send(item).is_err() {
+                        break; // Channel closed
+                    }
                 }
 
-                pb_main.inc(1);
-                pb_container.inc(1);
-            });
+                // Wait for all tasks in this container to finish
+                drop(done_tx); // Important: drop producer's copy
 
-            pb_container.finish_and_clear();
-            mp.remove(&pb_container);
+                // Collect completion signals
+                for _ in 0..tasks.len() {
+                    if done_rx.recv().is_err() {
+                        break;
+                    }
+                }
+
+                pb_container.finish_and_clear();
+                mp.remove(&pb_container);
+            }
         }
+
+        // Close channels
+        drop(tx);
+    });
+
+    if let Some(r) = reporter {
+        r.finish();
     }
 
     {
@@ -407,7 +430,13 @@ fn process_tasks(
 }
 
 /// Processes a single image conversion task.
-fn process_single_task(task: &Task, args: &ImageArgs) -> Result<()> {
+fn process_single_task(item: &WorkItem, args: &ImageArgs) -> Result<()> {
+    let task = &item.task;
+
+    if PathUtil::should_skip(&task.dest_path, args.overwrite) {
+        return Ok(());
+    }
+
     if matches!(task.task_type, TaskType::Copy) {
         if let Some(parent) = task.dest_path.parent() {
             fs::create_dir_all(parent)?;
@@ -424,34 +453,57 @@ fn process_single_task(task: &Task, args: &ImageArgs) -> Result<()> {
         return Ok(());
     }
 
-    let img_data = match &task.task_type {
-        TaskType::File => fs::read(&task.src_path)?,
+    let (img_data, original_size) = match &task.task_type {
+        TaskType::File => {
+            let data = fs::read(&task.src_path)?;
+            let len = data.len() as u64;
+            (data, len)
+        }
         TaskType::Archive { internal_path } => {
             let zip_file = fs::File::open(&task.src_path)?;
             let mut archive = zip::ZipArchive::new(zip_file)?;
             let mut a_file = archive.by_name(internal_path)?;
             let mut buffer = Vec::new();
             std::io::Read::read_to_end(&mut a_file, &mut buffer)?;
-            buffer
+            let len = buffer.len() as u64;
+            (buffer, len)
         }
         TaskType::Copy => unreachable!("Copy tasks are handled earlier"),
     };
-
-    let img = image::load_from_memory(&img_data)?;
 
     if let Some(parent) = task.dest_path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    match args.format.as_str() {
+    let (quality_val, quality_desc) = match args.format.as_str() {
         "avif" => {
-            encode_avif(img, &task.dest_path, args.quality, args.speed)?;
+            let img = image::load_from_memory(&img_data)?;
+            drop(img_data);
+            encode_avif(&img, &task.dest_path, args.quality, args.speed)?;
+
+            if item.report_tx.is_some() {
+                let result_img = image::open(&task.dest_path)?;
+                let score = compute_quality_from_image(&img, &result_img).unwrap_or(0.0);
+                (score, get_rating(score))
+            } else {
+                (0.0, String::new())
+            }
         }
         "webp" => {
+            let img = image::load_from_memory(&img_data)?;
+            drop(img_data);
             img.save_with_format(&task.dest_path, ImageFormat::WebP)?;
+
+            if item.report_tx.is_some() {
+                let result_img = image::open(&task.dest_path)?;
+                let score = compute_quality_from_image(&img, &result_img).unwrap_or(0.0);
+                (score, get_rating(score))
+            } else {
+                (0.0, String::new())
+            }
         }
         _ => unreachable!(),
-    }
+    };
 
     if !args.no_mtime
         && matches!(task.task_type, TaskType::File)
@@ -462,11 +514,33 @@ fn process_single_task(task: &Task, args: &ImageArgs) -> Result<()> {
         file.set_modified(mtime).ok();
     }
 
+    if let Some(tx) = &item.report_tx {
+        let final_size = fs::metadata(&task.dest_path).map(|m| m.len()).unwrap_or(0);
+        let name = match &task.task_type {
+            TaskType::File => task
+                .src_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+            TaskType::Archive { internal_path } => internal_path.clone(),
+            _ => "unknown".to_string(),
+        };
+
+        let _ = tx.send(ReportRecord {
+            file_name: name,
+            original_size,
+            final_size,
+            quality_value: quality_val,
+            quality_desc,
+        });
+    }
+
     Ok(())
 }
 
 /// Encodes an image to AVIF format with hardware-independent encoding.
-fn encode_avif(img: DynamicImage, dest: &Path, quality: u8, speed: u8) -> Result<()> {
+fn encode_avif(img: &DynamicImage, dest: &Path, quality: u8, speed: u8) -> Result<()> {
     let (width, height) = img.dimensions();
     let img_rgba = img.to_rgba8();
 

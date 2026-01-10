@@ -102,6 +102,10 @@ pub struct VideoArgs {
     /// Maximum directory recursion depth
     #[arg(long, default_value_t = 2, value_name = "N")]
     pub depth: usize,
+
+    /// Overwrite existing files even if they are not empty
+    #[arg(short, long, alias = "override")]
+    pub overwrite: bool,
 }
 
 /// Command-line arguments for video quality analysis (VMAF).

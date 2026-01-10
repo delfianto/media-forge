@@ -6,6 +6,7 @@
 //! - Filename utilities for display and cover image detection
 
 pub mod image;
+pub mod ui;
 pub mod video;
 
 use once_cell::sync::Lazy;
@@ -126,6 +127,57 @@ impl Scanner {
     /// Scans a directory for all files.
     pub fn scan_all(&self, root: &Path) -> Vec<PathBuf> {
         self.scan_all_with_callback(root, |_| {})
+    }
+
+    /// Scans a directory for supported media files with a progress bar.
+    pub fn scan_with_progress(&self, root: &Path, msg: &str) -> Vec<PathBuf> {
+        let pb = crate::ui::create_scanner(msg);
+        let mut items_found = 0;
+        let files = self.scan_with_callback(root, |path| {
+            if path.is_file() {
+                items_found += 1;
+                pb.set_position(items_found);
+            }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            pb.set_message(format!("Scanning: {}", name));
+        });
+        pb.finish_and_clear();
+        files
+    }
+}
+
+/// Path utilities for source and destination management.
+pub struct PathUtil;
+
+impl PathUtil {
+    /// Canonicalizes the source path and resolves the destination path relative to CWD if needed.
+    pub fn resolve_paths(
+        source: &Path,
+        destination: &Path,
+    ) -> Result<(PathBuf, PathBuf), anyhow::Error> {
+        let source_path = std::fs::canonicalize(source)?;
+
+        let dest_path = if destination.is_absolute() {
+            destination.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(destination)
+        };
+
+        Ok((source_path, dest_path))
+    }
+
+    /// Checks if a file should be skipped based on existence and the overwrite flag.
+    pub fn should_skip(path: &Path, overwrite: bool) -> bool {
+        if overwrite {
+            return false;
+        }
+        if let Ok(metadata) = std::fs::metadata(path) {
+            return metadata.len() > 0;
+        }
+        false
     }
 }
 

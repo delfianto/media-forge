@@ -44,8 +44,15 @@ enum Commands {
     /// Scans directories for image folders and creates properly formatted
     /// CBZ archives with natural sorting.
     /// Supports dry-run mode to preview operations before execution.
-    #[command(name = "archive", alias = "arch", visible_alias = "arch")]
+    #[command(name = "archive", alias = "zip", visible_alias = "zip")]
     Archive(image::ArchiveArgs),
+
+    /// Compare image quality using SSIMULACRA2
+    ///
+    /// Analyzes the quality of a distorted image compared to its original source.
+    /// Provides a score from 0-100 with a quality rating.
+    #[command(name = "simulacra", alias = "qimg", visible_alias = "qimg")]
+    ImageQuality(image::QualityArgs),
 
     /// Encode videos to AV1 using NVIDIA hardware acceleration
     ///
@@ -60,7 +67,7 @@ enum Commands {
     /// Analyzes the quality of an encoded video compared to its original source.
     /// Provides mean, min, and max VMAF scores with a quality rating.
     /// Requires FFmpeg with libvmaf support.
-    #[command(name = "quality", alias = "vmaf", visible_alias = "vmaf")]
+    #[command(name = "vmaf", alias = "qvid", visible_alias = "qvid")]
     Quality(video::QualityArgs),
 }
 
@@ -78,6 +85,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Image(args) => image::run(args),
         Commands::Archive(args) => image::run_archive(args),
+        Commands::ImageQuality(args) => image::run_quality(args),
         Commands::Video(args) => video::run(args),
         Commands::Quality(args) => video::run_quality(args),
     }
