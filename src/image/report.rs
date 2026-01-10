@@ -239,45 +239,83 @@ fn collect_comparison_pairs(
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("cbz"))
         {
-            if !destination.is_dir() {
-                println!("Warning: Source is Archive but Destination is File. Cannot compare.");
-                return Ok(vec![]);
-            }
+            collect_pairs_from_archive(source, destination, format, &mut pairs)?;
+        } else {
+            collect_pairs_from_file(source, destination, format, &mut pairs)?;
+        }
+    } else if source.is_dir() {
+        collect_pairs_from_directory(source, destination, format, &mut pairs)?;
+    }
 
-            let file = fs::File::open(source)?;
-            let mut archive = zip::ZipArchive::new(file)?;
+    Ok(pairs)
+}
 
-            for i in 0..archive.len() {
-                let file = archive.by_index(i)?;
-                if file.is_file() {
-                    let name = file.name().to_string();
-                    let path = Path::new(&name);
-                    let ext = path
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-                        let dest_file = destination.join(path).with_extension(format);
-                        if dest_file.exists() {
-                            let src_path_clone = source.to_path_buf();
-                            let name_clone = name.clone();
-                            let loader: DataLoader = Box::new(move || {
-                                let f = fs::File::open(&src_path_clone)?;
-                                let mut a = zip::ZipArchive::new(f)?;
-                                let mut entry = a.by_name(&name_clone)?;
-                                let mut buf = Vec::new();
-                                std::io::Read::read_to_end(&mut entry, &mut buf)?;
-                                let len = buf.len() as u64;
-                                let img = image::load_from_memory(&buf)?;
-                                Ok((img, len))
-                            });
-                            pairs.push((PathBuf::from(name), dest_file, loader));
-                        }
-                    }
+fn collect_pairs_from_archive(
+    source: &Path,
+    destination: &Path,
+    format: &str,
+    pairs: &mut Vec<(PathBuf, PathBuf, DataLoader)>,
+) -> anyhow::Result<()> {
+    if !destination.is_dir() {
+        println!("Warning: Source is Archive but Destination is File. Cannot compare.");
+        return Ok(());
+    }
+
+    let file = fs::File::open(source)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+
+    for i in 0..archive.len() {
+        let file = archive.by_index(i)?;
+        if file.is_file() {
+            let name = file.name().to_string();
+            let path = Path::new(&name);
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+                let dest_file = destination.join(path).with_extension(format);
+                if dest_file.exists() {
+                    let src_path_clone = source.to_path_buf();
+                    let name_clone = name.clone();
+                    let loader: DataLoader = Box::new(move || {
+                        let f = fs::File::open(&src_path_clone)?;
+                        let mut a = zip::ZipArchive::new(f)?;
+                        let mut entry = a.by_name(&name_clone)?;
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut entry, &mut buf)?;
+                        let len = buf.len() as u64;
+                        let img = image::load_from_memory(&buf)?;
+                        Ok((img, len))
+                    });
+                    pairs.push((PathBuf::from(name), dest_file, loader));
                 }
             }
-        } else if destination.is_file() {
+        }
+    }
+    Ok(())
+}
+
+fn collect_pairs_from_file(
+    source: &Path,
+    destination: &Path,
+    format: &str,
+    pairs: &mut Vec<(PathBuf, PathBuf, DataLoader)>,
+) -> anyhow::Result<()> {
+    if destination.is_file() {
+        let src_path_clone = source.to_path_buf();
+        let loader: DataLoader = Box::new(move || {
+            let buf = fs::read(&src_path_clone)?;
+            let len = buf.len() as u64;
+            let img = image::load_from_memory(&buf)?;
+            Ok((img, len))
+        });
+        pairs.push((source.to_path_buf(), destination.to_path_buf(), loader));
+    } else if destination.is_dir() {
+        let file_name = source.file_name().unwrap();
+        let dest_file = destination.join(file_name).with_extension(format);
+        if dest_file.exists() {
             let src_path_clone = source.to_path_buf();
             let loader: DataLoader = Box::new(move || {
                 let buf = fs::read(&src_path_clone)?;
@@ -285,54 +323,48 @@ fn collect_comparison_pairs(
                 let img = image::load_from_memory(&buf)?;
                 Ok((img, len))
             });
-            pairs.push((source.to_path_buf(), destination.to_path_buf(), loader));
-        } else if destination.is_dir() {
-            let file_name = source.file_name().unwrap();
-            let dest_file = destination.join(file_name).with_extension(format);
-            if dest_file.exists() {
-                let src_path_clone = source.to_path_buf();
-                let loader: DataLoader = Box::new(move || {
-                    let buf = fs::read(&src_path_clone)?;
-                    let len = buf.len() as u64;
-                    let img = image::load_from_memory(&buf)?;
-                    Ok((img, len))
-                });
-                pairs.push((source.to_path_buf(), dest_file, loader));
-            }
+            pairs.push((source.to_path_buf(), dest_file, loader));
         }
-    } else if source.is_dir() {
-        if !destination.is_dir() {
-            println!("Warning: Source is Directory but Destination is File. Cannot compare.");
-            return Ok(vec![]);
-        }
+    }
+    Ok(())
+}
 
-        for entry in WalkDir::new(source) {
-            let entry = entry?;
-            if entry.file_type().is_file() {
-                let path = entry.path();
-                let ext = path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-                    let rel_path = path.strip_prefix(source)?;
-                    let dest_file = destination.join(rel_path).with_extension(format);
+fn collect_pairs_from_directory(
+    source: &Path,
+    destination: &Path,
+    format: &str,
+    pairs: &mut Vec<(PathBuf, PathBuf, DataLoader)>,
+) -> anyhow::Result<()> {
+    if !destination.is_dir() {
+        println!("Warning: Source is Directory but Destination is File. Cannot compare.");
+        return Ok(());
+    }
 
-                    if dest_file.exists() {
-                        let src_path_clone = path.to_path_buf();
-                        let loader: DataLoader = Box::new(move || {
-                            let buf = fs::read(&src_path_clone)?;
-                            let len = buf.len() as u64;
-                            let img = image::load_from_memory(&buf)?;
-                            Ok((img, len))
-                        });
-                        pairs.push((path.to_path_buf(), dest_file, loader));
-                    }
+    for entry in WalkDir::new(source) {
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+                let rel_path = path.strip_prefix(source)?;
+                let dest_file = destination.join(rel_path).with_extension(format);
+
+                if dest_file.exists() {
+                    let src_path_clone = path.to_path_buf();
+                    let loader: DataLoader = Box::new(move || {
+                        let buf = fs::read(&src_path_clone)?;
+                        let len = buf.len() as u64;
+                        let img = image::load_from_memory(&buf)?;
+                        Ok((img, len))
+                    });
+                    pairs.push((path.to_path_buf(), dest_file, loader));
                 }
             }
         }
     }
-
-    Ok(pairs)
+    Ok(())
 }
