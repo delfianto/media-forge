@@ -179,3 +179,107 @@ impl Walker {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::tempdir;
+    use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn test_walker_scan_flat() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        File::create(root.join("test1.jpg")).unwrap();
+        File::create(root.join("test2.png")).unwrap();
+        File::create(root.join("other.txt")).unwrap();
+
+        let walker = Walker::new(&["jpg", "png"], 1, false);
+        let assets = walker.scan_flat(root);
+
+        assert_eq!(assets.len(), 2);
+        let paths: Vec<_> = assets
+            .iter()
+            .map(|a| a.path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert!(paths.contains(&"test1.jpg"));
+        assert!(paths.contains(&"test2.png"));
+    }
+
+    #[test]
+    fn test_walker_recursive() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+
+        File::create(root.join("root.jpg")).unwrap();
+        File::create(sub.join("sub.jpg")).unwrap();
+
+        let walker = Walker::new(&["jpg"], 2, true);
+        let assets = walker.scan_flat(root);
+        assert_eq!(assets.len(), 2);
+
+        let walker_no_rec = Walker::new(&["jpg"], 2, false);
+        let assets_no_rec = walker_no_rec.scan_flat(root);
+        assert_eq!(assets_no_rec.len(), 1);
+    }
+
+    #[test]
+    fn test_walker_archive_inspection() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let zip_path = root.join("test.cbz");
+
+        let file = File::create(&zip_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+        zip.start_file("img1.jpg", options).unwrap();
+        zip.write_all(b"fake data").unwrap();
+        zip.start_file("notes.txt", options).unwrap();
+        zip.write_all(b"text").unwrap();
+        zip.finish().unwrap();
+
+        let walker = Walker::new(&["jpg"], 1, false);
+        let assets = walker.scan_flat(root);
+
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].path, zip_path);
+        if let MediaSource::Archive {
+            archive_path,
+            entry_name,
+        } = &assets[0].source
+        {
+            assert_eq!(archive_path, &zip_path);
+            assert_eq!(entry_name, "img1.jpg");
+        } else {
+            panic!("Expected Archive source");
+        }
+    }
+
+    #[test]
+    fn test_scan_grouped() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let sub1 = root.join("sub1");
+        let sub2 = root.join("sub2");
+        std::fs::create_dir(&sub1).unwrap();
+        std::fs::create_dir(&sub2).unwrap();
+
+        File::create(sub1.join("a.jpg")).unwrap();
+        File::create(sub1.join("b.jpg")).unwrap();
+        File::create(sub2.join("c.jpg")).unwrap();
+
+        let walker = Walker::new(&["jpg"], 2, true);
+        let groups = walker.scan_grouped(root);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups.get(&sub1).unwrap().len(), 2);
+        assert_eq!(groups.get(&sub2).unwrap().len(), 1);
+    }
+}

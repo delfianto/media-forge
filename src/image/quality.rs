@@ -10,8 +10,11 @@ use std::path::Path;
 pub fn run(args: QualityArgs) -> anyhow::Result<()> {
     println!("Comparing images using SSIMULACRA2...");
     println!("Original:  {}", args.original.display());
-    println!("Distorted: {}
-", args.distorted.display());
+    println!(
+        "Distorted: {}
+",
+        args.distorted.display()
+    );
 
     let score = compute_quality(&args.original, &args.distorted)?;
     display_results(score);
@@ -103,4 +106,18 @@ fn display_results(score: f64) {
     println!("SSIMULACRA2 Results:");
     println!("  Score: {}{:.2}\x1b[0m ({})", color, score, rating);
     println!("{}\n", "=".repeat(50));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_rating() {
+        assert_eq!(get_rating(95.0), "Excellent");
+        assert_eq!(get_rating(80.0), "Very Good");
+        assert_eq!(get_rating(60.0), "Good");
+        assert_eq!(get_rating(40.0), "Fair");
+        assert_eq!(get_rating(10.0), "Poor");
+    }
 }

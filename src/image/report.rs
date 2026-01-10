@@ -1,3 +1,4 @@
+use crate::constants::REPORT_CHANNEL_CAPACITY;
 use crate::image::quality::{compute_quality_from_image, get_rating};
 use crate::{IMAGE_EXTENSIONS, ui};
 use crossbeam_channel::{Receiver, Sender, bounded};
@@ -56,7 +57,7 @@ impl Reporter {
     /// The writer thread will consume records from the channel and write them to the CSV file
     /// at `path`.
     pub fn new(path: PathBuf) -> Self {
-        let (tx, rx) = bounded::<ReportRecord>(1000);
+        let (tx, rx) = bounded::<ReportRecord>(REPORT_CHANNEL_CAPACITY);
         let p = path.clone();
 
         let handle = std::thread::spawn(move || {
@@ -215,9 +216,7 @@ pub fn generate_conversion_report(
             if let Err(e) = result {
                 eprintln!(
                     "Error analyzing pair {:?} -> {:?}: {}",
-                    src_path,
-                    dest_path,
-                    e
+                    src_path, dest_path, e
                 );
             }
             pb.inc(1);
@@ -266,7 +265,7 @@ fn collect_pairs_from_archive(
 ) -> anyhow::Result<()> {
     if !destination.is_dir() {
         println!("Warning: Source is Archive but Destination is File. Cannot compare.");
-        return Ok(())
+        return Ok(());
     }
 
     let file = fs::File::open(source)?;
@@ -347,7 +346,7 @@ fn collect_pairs_from_directory(
 ) -> anyhow::Result<()> {
     if !destination.is_dir() {
         println!("Warning: Source is Directory but Destination is File. Cannot compare.");
-        return Ok(())
+        return Ok(());
     }
 
     for entry in WalkDir::new(source) {
@@ -377,4 +376,46 @@ fn collect_pairs_from_directory(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_report_summary() {
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+
+        let reporter = Reporter::new(path.clone());
+        let sender = reporter.sender();
+
+        sender
+            .send(ReportRecord::new(
+                "test1.jpg".into(),
+                1000,
+                500,
+                95.0,
+                "Excellent".into(),
+            ))
+            .unwrap();
+        sender
+            .send(ReportRecord::new(
+                "test2.jpg".into(),
+                2000,
+                1500,
+                85.0,
+                "Very Good".into(),
+            ))
+            .unwrap();
+
+        drop(sender);
+        reporter.finish();
+
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("test1.jpg"));
+        assert!(content.contains("test2.jpg"));
+    }
 }

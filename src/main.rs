@@ -73,12 +73,11 @@ enum Commands {
 
 /// Parses command-line arguments and routes execution to the appropriate subcommand.
 fn main() -> Result<()> {
-    ctrlc::set_handler(move || {
+    ctrlc::try_set_handler(move || {
         eprintln!("\n\x1b[31m[Interrupt] Shutting down and cleaning up child processes...\x1b[0m");
         ProcessManager::kill_all();
         std::process::exit(130);
-    })
-    .expect("Error setting Ctrl-C handler");
+    })?;
 
     let cli = Cli::parse();
 

@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::video::builder::{FfmpegCommandBuilder, HwAccel, VideoCodec};
 use crate::video::{FFMPEG_PROGRESS_RE, Result, VideoArgs, VideoError, get_video_metadata};
 
 /// Represents a single video encoding task.
@@ -45,7 +46,7 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
 
     println!("Found {} videos to process.", tasks.len());
     if tasks.is_empty() {
-        return Ok(())
+        return Ok(());
     }
 
     process_video_tasks(tasks, args)?;
@@ -138,7 +139,7 @@ fn collect_video_tasks(
     pb_scan.finish_and_clear();
 
     let tasks = (Arc::try_unwrap(tasks_mutex)
-        .map_err(|_| VideoError::GpuError("Failed to unwrap task list".into()))?) 
+        .map_err(|_| VideoError::GpuError("Failed to unwrap task list".into()))?)
     .into_inner()
     .map_err(|_| VideoError::GpuError("Failed to unlock task list".into()))?;
 
@@ -195,52 +196,23 @@ fn convert_video(task: &VideoTask, args: &VideoArgs, pb: &ProgressBar) -> Result
         fs::create_dir_all(parent)?;
     }
 
-    let src_str = task
-        .src
-        .to_str()
-        .ok_or_else(|| VideoError::InvalidPath(task.src.clone()))?;
-    let dest_str = task
-        .dest
-        .to_str()
-        .ok_or_else(|| VideoError::InvalidPath(task.dest.clone()))?;
-
-    let mut cmd = Command::new("ffmpeg");
-    cmd.args([
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-stats",
-        "-hwaccel",
-        "cuda",
-        "-hwaccel_output_format",
-        "cuda",
-        "-i",
-        src_str,
-        "-c:v",
-        "av1_nvenc",
-        "-preset",
-        &args.preset,
-        "-tune",
-        "hq",
-        "-cq",
-        &args.cq.to_string(),
-        "-c:a",
-        "copy",
-    ]);
+    let mut builder = FfmpegCommandBuilder::new(&task.src, &task.dest)
+        .hwaccel(HwAccel::Cuda)
+        .video_codec(VideoCodec::Av1Nvenc)
+        .preset(&args.preset)
+        .cq(args.cq)
+        .args(["-tune", "hq", "-c:a", "copy"]);
 
     if args.ext == "mp4" {
-        cmd.args(["-c:s", "mov_text"]);
+        builder = builder.args(["-c:s", "mov_text"]);
     } else {
-        cmd.args(["-c:s", "copy"]);
+        builder = builder.args(["-c:s", "copy"]);
     }
-    cmd.arg(dest_str);
 
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
+    let mut cmd = builder.build();
 
     if SHUTDOWN.load(Ordering::SeqCst) {
-        return Ok(())
+        return Ok(());
     }
 
     let mut child = cmd.spawn()?;

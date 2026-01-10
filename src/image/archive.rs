@@ -20,10 +20,9 @@ struct ArchiveTask {
 /// Main entry point for archive creation orchestration.
 pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
     let num_threads = CpuControl::get_thread_count(args.jobs);
-    rayon::ThreadPoolBuilder::new()
+    let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
-        .build_global()
-        .map_err(ImageError::from)?;
+        .build_global();
 
     let source_path = fs::canonicalize(&args.source)
         .map_err(|_| ImageError::SourceNotFound(args.source.clone()))?;
@@ -123,7 +122,7 @@ fn find_image_folders<F>(
     recursive: bool,
     tasks: &mut Vec<ArchiveTask>,
     callback: &mut F,
-) -> Result<()> 
+) -> Result<()>
 where
     F: FnMut(&Path),
 {
@@ -254,7 +253,7 @@ fn execute_archive_tasks(
         let pb_inner = mp.add(ProgressBar::new_spinner());
         pb_inner.set_style(ui::generic_spinner_style());
         pb_inner.set_message(format!(
-            "{{:?}}",
+            "{:?}",
             task.src_dir.file_name().unwrap_or_default()
         ));
 
@@ -338,7 +337,7 @@ fn write_files_to_zip(
         let path = entry.path();
         let arc_name = path
             .file_name()
-            .ok_or_else(|| ImageError::InvalidFilename(path.clone()))?;
+            .ok_or_else(|| ImageError::InvalidFilename(path.clone()))?
             .to_string_lossy();
 
         zip.start_file(arc_name, options)?;
