@@ -1,5 +1,5 @@
-use crate::{CpuControl, IMAGE_EXTENSIONS};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use crate::{CpuControl, IMAGE_EXTENSIONS, ui};
+use indicatif::{MultiProgress, ProgressBar};
 use rayon::prelude::*;
 use std::fs;
 use std::io::{self, Write};
@@ -59,13 +59,7 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
         t
     } else {
         println!("Scanning {} for image folders...", source_path.display());
-        let pb_scan = ProgressBar::new_spinner();
-        pb_scan.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} {msg} {pos} items found")
-                .unwrap(),
-        );
-        pb_scan.enable_steady_tick(std::time::Duration::from_millis(100));
+        let pb_scan = ui::create_scanner("Scanning...");
 
         let t = collect_archive_tasks(&source_path, &dest_path, args.recursive, |path| {
             items_found += 1;
@@ -252,23 +246,13 @@ fn execute_archive_tasks(
 
     let mp = MultiProgress::new();
     let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
-    pb_main.set_style(
-        ProgressStyle::default_bar()
-            .template(
-                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}"
-            )?
-            .progress_chars("#>-")
-    );
+    pb_main.set_style(ui::main_bar_style());
 
     let pb_main = Arc::new(pb_main);
 
     tasks.par_iter().for_each(|task| {
         let pb_inner = mp.add(ProgressBar::new_spinner());
-        pb_inner.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.blue} {msg}")
-                .unwrap(),
-        );
+        pb_inner.set_style(ui::generic_spinner_style());
         pb_inner.set_message(format!(
             "{:?}",
             task.src_dir.file_name().unwrap_or_default()

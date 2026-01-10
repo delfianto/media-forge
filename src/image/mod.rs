@@ -4,6 +4,8 @@ use thiserror::Error;
 
 pub mod archive;
 pub mod convert;
+pub mod quality;
+pub mod report;
 
 /// Unified error type for all image and archive operations.
 #[derive(Error, Debug)]
@@ -46,9 +48,24 @@ pub enum ImageError {
 
     #[error("Archive verification failed for {0:?}. File count mismatch.")]
     VerificationFailed(PathBuf),
+
+    #[error("Image dimensions mismatch: original {0:?} vs distorted {1:?}")]
+    DimensionMismatch((u32, u32), (u32, u32)),
 }
 
 pub type Result<T> = std::result::Result<T, ImageError>;
+
+/// Command-line arguments for image quality analysis (SSIMULACRA2).
+#[derive(ClapArgs, Debug, Clone)]
+pub struct QualityArgs {
+    /// Original reference image
+    #[arg(value_name = "ORIGINAL")]
+    pub original: PathBuf,
+
+    /// Distorted/encoded image to evaluate
+    #[arg(value_name = "DISTORTED")]
+    pub distorted: PathBuf,
+}
 
 /// Command-line arguments for image conversion.
 #[derive(ClapArgs, Debug, Clone)]
@@ -84,6 +101,18 @@ pub struct ImageArgs {
     /// Disable preservation of original modification times
     #[arg(long)]
     pub no_mtime: bool,
+
+    /// Overwrite existing files even if they are not empty
+    #[arg(short, long, alias = "override")]
+    pub overwrite: bool,
+
+    /// Disable CSV report generation
+    #[arg(long)]
+    pub no_report: bool,
+
+    /// Path to the CSV report file
+    #[arg(long, default_value = "conversion_report.csv")]
+    pub report_path: PathBuf,
 }
 
 /// Command-line arguments for archive creation.
@@ -148,4 +177,9 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
 /// Orchestrates the archive creation process.
 pub fn run_archive(args: ArchiveArgs) -> anyhow::Result<()> {
     archive::run(args)
+}
+
+/// Orchestrates the image quality analysis process.
+pub fn run_quality(args: QualityArgs) -> anyhow::Result<()> {
+    quality::run(args)
 }

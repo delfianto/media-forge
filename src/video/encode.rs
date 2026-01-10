@@ -1,5 +1,5 @@
-use crate::{Naming, ProcessManager, SHUTDOWN, Scanner, VIDEO_EXTENSIONS};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use crate::{Naming, PathUtil, ProcessManager, SHUTDOWN, Scanner, VIDEO_EXTENSIONS, ui};
+use indicatif::{MultiProgress, ProgressBar};
 use rayon::prelude::*;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -14,51 +14,30 @@ use crate::video::{FFMPEG_PROGRESS_RE, Result, VideoArgs, VideoError, get_video_
 /// Represents a single video encoding task.
 #[derive(Debug, Clone)]
 pub struct VideoTask {
+    /// Path to the source video file.
     pub src: PathBuf,
+    /// Path to the destination video file.
     pub dest: PathBuf,
+    /// Duration of the video in seconds.
     pub duration: f64,
 }
 
 /// Main entry point for video encoding orchestration.
+///
+/// This function verifies dependencies, scans for videos, collects tasks,
+/// and executes them in parallel using the specified number of threads.
 pub fn run(args: VideoArgs) -> anyhow::Result<()> {
     check_encoding_requirements()?;
 
-    let source_path = fs::canonicalize(&args.source)
+    let (source_path, dest_path) = PathUtil::resolve_paths(&args.source, &args.destination)
         .map_err(|_| VideoError::SourceNotFound(args.source.clone()))?;
-
-    let dest_path = if args.destination.is_absolute() {
-        args.destination.clone()
-    } else {
-        std::env::current_dir()
-            .map_err(|_| VideoError::NoCurrentDir)?
-            .join(&args.destination)
-    };
 
     let scanner = Scanner::new(args.depth);
     let files = if source_path.is_file() {
         vec![source_path.clone()]
     } else {
         println!("Scanning {} for videos...", source_path.display());
-        let pb_scan_dir = ProgressBar::new_spinner();
-        pb_scan_dir.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} {msg} {pos} items found")
-                .unwrap(),
-        );
-        pb_scan_dir.enable_steady_tick(std::time::Duration::from_millis(100));
-
-        let mut items_found = 0;
-        let f = scanner.scan_with_callback(&source_path, |path| {
-            items_found += 1;
-            pb_scan_dir.set_position(items_found);
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default();
-            pb_scan_dir.set_message(format!("Scanning: {}", name));
-        });
-        pb_scan_dir.finish_and_clear();
-        f
+        scanner.scan_with_progress(&source_path, "Scanning...")
     };
 
     let tasks = collect_video_tasks(files, &source_path, &dest_path, &args)?;
@@ -73,6 +52,7 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Verifies that FFmpeg and ffprobe are available in the system PATH.
 fn check_encoding_requirements() -> Result<()> {
     if Command::new("ffprobe")
         .arg("-version")
@@ -95,6 +75,10 @@ fn check_encoding_requirements() -> Result<()> {
     Ok(())
 }
 
+/// Collects valid video tasks from the list of files.
+///
+/// Filters for valid video extensions, checks metadata, and skips files
+/// based on overwrite settings and existing output.
 fn collect_video_tasks(
     files: Vec<PathBuf>,
     source_path: &Path,
@@ -107,11 +91,7 @@ fn collect_video_tasks(
         .build()?;
 
     let pb_scan = ProgressBar::new(files.len() as u64);
-    pb_scan.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner} Analyzing {pos}/{len} ({msg})")
-            .map_err(VideoError::from)?,
-    );
+    pb_scan.set_style(ui::main_bar_style());
 
     pool.install(|| {
         files.par_iter().for_each(|file| {
@@ -145,7 +125,7 @@ fn collect_video_tasks(
                     dest_path.join(rel_path).with_extension(&args.ext)
                 };
 
-                if !dest_file.exists()
+                if !PathUtil::should_skip(&dest_file, args.overwrite)
                     && let Ok(mut tasks) = tasks_mutex.lock()
                 {
                     tasks.push(VideoTask {
@@ -155,6 +135,7 @@ fn collect_video_tasks(
                     });
                 }
             }
+
             pb_scan.inc(1);
         });
     });
@@ -171,11 +152,7 @@ fn collect_video_tasks(
 fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     let mp = MultiProgress::new();
     let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
-    pb_main.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")?
-            .progress_chars("#>- "),
-    );
+    pb_main.set_style(ui::main_bar_style());
     pb_main.set_message("Total Video Progress");
 
     let pool = rayon::ThreadPoolBuilder::new()
@@ -189,12 +166,7 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<()> {
     pool.install(|| {
         tasks.par_iter().for_each(|task| {
             let pb_file = mp.add(ProgressBar::new(task.duration as u64));
-            pb_file.set_style(
-                ProgressStyle::default_bar()
-                    .template("  {msg}\n  {bar:40.magenta/blue} {percent}% {eta}")
-                    .unwrap()
-                    .progress_chars("=>-"),
-            );
+            pb_file.set_style(ui::file_progress_style());
 
             let name = task
                 .src
