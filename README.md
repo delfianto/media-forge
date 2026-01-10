@@ -11,6 +11,12 @@ A high-performance CLI tool for batch media conversion on Linux. Convert images 
 - **Progress Tracking**: Real-time progress bars with per-task and overall progress indicators
 - **Archive Support**: Extract and convert images directly from ZIP/CBZ archives
 
+## ⚠️ Disclaimer and Safety
+
+**Media-Forge is provided "as is", without warranty of any kind.** Users are solely responsible for ensuring they have proper backups of their data before performing any format conversions or cleanup operations.
+
+While the author has successfully tested this tool by converting nearly **1.5TB of ultra-high resolution JPEGs** (some exceeding 30MB per file) without a single instance of data loss or corruption, your mileage may vary. Always verify a subset of your data after conversion.
+
 ## Requirements
 
 ### System Requirements
@@ -27,6 +33,7 @@ A high-performance CLI tool for batch media conversion on Linux. Convert images 
 ### For Image Conversion
 
 - No special hardware required (CPU-based encoding)
+- **Note on Stability**: AVIF encoding is extremely demanding on the CPU and memory subsystem and utilizes **AVX-512** instructions where available. If your system crashes or hangs during long-running batch conversions, it likely indicates hardware instability or an unstable overclock.
 
 ## Installation
 
@@ -218,6 +225,10 @@ media-forge archive --cleanup
 ## Understanding Encoding Parameters
 
 ### AVIF Parameters (Image Encoding)
+
+While AVIF offers incredible lossy compression, it is still limited by the information contained in the original source data. The final outcome depends heavily on the source:
+- **Lossless Sources**: You can expect truly amazing compression results.
+- **High-Quality/High-Res JPEGs**: Even with compressed sources, converting very high-resolution JPEGs can achieve **60% to 70% size reduction** without perceivable quality loss.
 
 #### Quality (`--quality`, default: 72)
 
