@@ -5,6 +5,9 @@ use std::time::Duration;
 /// Tick rate for indeterminate spinners.
 pub const SPINNER_TICK: Duration = Duration::from_millis(SPINNER_TICK_MS);
 
+/// Progress bar characters for a shaded look (filled, current, empty).
+pub const PROGRESS_CHARS: &str = "█▓░";
+
 /// Returns the standard style for indeterminate spinners used during file scanning.
 pub fn scanner_style() -> ProgressStyle {
     ProgressStyle::default_spinner()
@@ -30,26 +33,26 @@ pub fn analyzing_style() -> ProgressStyle {
 pub fn main_bar_style() -> ProgressStyle {
     ProgressStyle::default_bar()
         .template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan}] {pos}/{len} ({eta}) {msg}",
         )
         .expect("Invalid template")
-        .progress_chars("#>-based")
+        .progress_chars(PROGRESS_CHARS)
 }
 
 /// Returns the standard style for sub-task or container-level progress bars.
 pub fn sub_bar_style() -> ProgressStyle {
     ProgressStyle::default_bar()
-        .template("  {bar:30.magenta/blue} {pos}/{len} {msg}")
+        .template("  [{bar:30.yellow}] {pos}/{len} {msg}")
         .expect("Invalid template")
-        .progress_chars("=>-")
+        .progress_chars(PROGRESS_CHARS)
 }
 
 /// Returns the standard style for single file progress, typically used for long-running video encoding.
 pub fn file_progress_style() -> ProgressStyle {
     ProgressStyle::default_bar()
-        .template("  {msg}\n  {bar:40.magenta/blue} {percent}% {eta}")
+        .template("  {msg}\n  [{bar:40.yellow}] {percent}% {eta}")
         .expect("Invalid template")
-        .progress_chars("=>-")
+        .progress_chars(PROGRESS_CHARS)
 }
 
 /// Creates and initializes a standard scanner progress bar with a message.
