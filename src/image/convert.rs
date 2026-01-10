@@ -1,5 +1,3 @@
-use crate::image::quality::{compute_quality_from_image, get_rating};
-use crate::image::report::{ReportRecord, Reporter};
 use crate::image::{ImageArgs, ImageError, Result, Task, TaskType};
 use crate::{
     ARCHIVE_EXTENSIONS, CpuControl, IMAGE_EXTENSIONS, Naming, PathUtil, SHUTDOWN, Scanner,
@@ -8,6 +6,8 @@ use crate::{
 use crossbeam_channel::{Sender, bounded};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use indicatif::{MultiProgress, ProgressBar};
+use rayon::iter::ParallelIterator;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,15 +15,22 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// Represents a unit of work to be processed by a worker thread.
 struct WorkItem {
+    /// The specific task to be executed.
     task: Task,
+    /// The progress bar for the container this task belongs to.
     pb_container: ProgressBar,
+    /// The main progress bar for the overall process.
     pb_main: Arc<ProgressBar>,
+    /// Channel to signal when the task is complete.
     complete_signal: Sender<()>,
-    report_tx: Option<Sender<ReportRecord>>,
 }
 
 /// Orchestrates the image conversion process.
+///
+/// This function initializes the thread pool, resolves paths, scans for files,
+/// and manages the concurrent processing of tasks using a bounded channel.
 pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     if cfg!(debug_assertions) {
         println!(
@@ -70,14 +77,21 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
         tasks_by_container,
         container_names,
         total_files,
-        args,
+        &args,
         num_threads,
     )?;
+
+    if args.report {
+        crate::image::report::generate_conversion_report(&source_path, &dest_path, &args.format)?;
+    }
 
     Ok(())
 }
 
 /// Collects conversion tasks by scanning files and archives in parallel.
+///
+/// Returns a map of tasks grouped by their parent container (folder or archive)
+/// and the total count of files to process.
 fn collect_tasks(
     files: Vec<PathBuf>,
     source_path: &Path,
@@ -101,7 +115,6 @@ fn collect_tasks(
 
     let total_files_counter = std::sync::atomic::AtomicUsize::new(0);
 
-    use rayon::prelude::*;
     let all_tasks: Vec<Task> = files
         .par_iter()
         .map(|file| {
@@ -269,12 +282,15 @@ fn collect_archive_tasks(
     Ok(tasks)
 }
 
-/// Executes conversion tasks with progress tracking.
+/// Executes conversion tasks with progress tracking using a bounded channel.
+///
+/// This function sets up a producer-consumer model where tasks are fed into a
+/// bounded channel and processed by a fixed pool of worker threads.
 fn process_tasks(
     tasks_by_container: HashMap<String, Vec<Task>>,
     container_names: Vec<String>,
     total_files: usize,
-    args: ImageArgs,
+    args: &ImageArgs,
     num_threads: usize,
 ) -> Result<()> {
     let mp = MultiProgress::new();
@@ -293,25 +309,22 @@ fn process_tasks(
     let spinner_pool = Arc::new(Mutex::new(spinners));
 
     let start_instant = Instant::now();
-    let args = Arc::new(args);
+    // Use &args directly or clone if needed for threads. Since threads are scoped, reference is fine?
+    // wait, args is passed to threads. threads move. So we need to clone or Arc it?
+    // args is ImageArgs struct (Clone).
+    // process_tasks takes &args.
+    // We can clone it for the loop.
+    let args_arc = Arc::new(args.clone());
     let pb_main = Arc::new(pb_main);
 
-    // Channel for distributing work
+    // Channel for distributing work (bounded to limit memory usage)
     let (tx, rx) = bounded::<WorkItem>(num_threads * 2);
-
-    // Reporting
-    let should_report = !args.no_report;
-    let reporter = if should_report {
-        Some(Reporter::new(args.report_path.clone()))
-    } else {
-        None
-    };
 
     std::thread::scope(|s| {
         // Spawn workers
         for _ in 0..num_threads {
             let rx = rx.clone();
-            let args = args.clone();
+            let args = args_arc.clone();
             let spinner_pool = spinner_pool.clone();
 
             s.spawn(move || {
@@ -332,7 +345,7 @@ fn process_tasks(
 
                     let name_display = Naming::truncate_from_start(&name, 30);
 
-                    // Acquire spinner
+                    // Acquire spinner for UI feedback
                     let pb_opt = {
                         let mut pool = spinner_pool.lock().unwrap();
                         pool.pop()
@@ -343,12 +356,10 @@ fn process_tasks(
                         spinner.enable_steady_tick(ui::SPINNER_TICK);
                     }
 
-                    // Process
                     if let Err(e) = process_single_task(&item, &args) {
                         eprintln!("Error processing {}: {}", name_display, e);
                     }
 
-                    // Release spinner
                     if let Some(spinner) = pb_opt {
                         spinner.set_message("Idle");
                         spinner.disable_steady_tick();
@@ -358,7 +369,7 @@ fn process_tasks(
                     item.pb_container.inc(1);
                     item.pb_main.inc(1);
 
-                    // Signal completion
+                    // Signal completion to the producer
                     let _ = item.complete_signal.send(());
                 }
             });
@@ -383,7 +394,6 @@ fn process_tasks(
                         pb_container: pb_container.clone(),
                         pb_main: pb_main.clone(),
                         complete_signal: done_tx.clone(),
-                        report_tx: reporter.as_ref().map(|r| r.sender()),
                     };
 
                     if tx.send(item).is_err() {
@@ -391,10 +401,9 @@ fn process_tasks(
                     }
                 }
 
-                // Wait for all tasks in this container to finish
-                drop(done_tx); // Important: drop producer's copy
+                // Wait for all tasks in this container to finish.
+                drop(done_tx);
 
-                // Collect completion signals
                 for _ in 0..tasks.len() {
                     if done_rx.recv().is_err() {
                         break;
@@ -406,13 +415,9 @@ fn process_tasks(
             }
         }
 
-        // Close channels
+        // Close channels to stop workers
         drop(tx);
     });
-
-    if let Some(r) = reporter {
-        r.finish();
-    }
 
     {
         let pool = spinner_pool.lock().unwrap();
@@ -453,20 +458,15 @@ fn process_single_task(item: &WorkItem, args: &ImageArgs) -> Result<()> {
         return Ok(());
     }
 
-    let (img_data, original_size) = match &task.task_type {
-        TaskType::File => {
-            let data = fs::read(&task.src_path)?;
-            let len = data.len() as u64;
-            (data, len)
-        }
+    let img_data = match &task.task_type {
+        TaskType::File => fs::read(&task.src_path)?,
         TaskType::Archive { internal_path } => {
             let zip_file = fs::File::open(&task.src_path)?;
             let mut archive = zip::ZipArchive::new(zip_file)?;
             let mut a_file = archive.by_name(internal_path)?;
             let mut buffer = Vec::new();
             std::io::Read::read_to_end(&mut a_file, &mut buffer)?;
-            let len = buffer.len() as u64;
-            (buffer, len)
+            buffer
         }
         TaskType::Copy => unreachable!("Copy tasks are handled earlier"),
     };
@@ -475,32 +475,16 @@ fn process_single_task(item: &WorkItem, args: &ImageArgs) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    let (quality_val, quality_desc) = match args.format.as_str() {
+    match args.format.as_str() {
         "avif" => {
             let img = image::load_from_memory(&img_data)?;
-            drop(img_data);
+            drop(img_data); // Free raw buffer early to reduce memory pressure
             encode_avif(&img, &task.dest_path, args.quality, args.speed)?;
-
-            if item.report_tx.is_some() {
-                let result_img = image::open(&task.dest_path)?;
-                let score = compute_quality_from_image(&img, &result_img).unwrap_or(0.0);
-                (score, get_rating(score))
-            } else {
-                (0.0, String::new())
-            }
         }
         "webp" => {
             let img = image::load_from_memory(&img_data)?;
             drop(img_data);
             img.save_with_format(&task.dest_path, ImageFormat::WebP)?;
-
-            if item.report_tx.is_some() {
-                let result_img = image::open(&task.dest_path)?;
-                let score = compute_quality_from_image(&img, &result_img).unwrap_or(0.0);
-                (score, get_rating(score))
-            } else {
-                (0.0, String::new())
-            }
         }
         _ => unreachable!(),
     };
@@ -512,28 +496,6 @@ fn process_single_task(item: &WorkItem, args: &ImageArgs) -> Result<()> {
     {
         let file = fs::File::open(&task.dest_path)?;
         file.set_modified(mtime).ok();
-    }
-
-    if let Some(tx) = &item.report_tx {
-        let final_size = fs::metadata(&task.dest_path).map(|m| m.len()).unwrap_or(0);
-        let name = match &task.task_type {
-            TaskType::File => task
-                .src_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-            TaskType::Archive { internal_path } => internal_path.clone(),
-            _ => "unknown".to_string(),
-        };
-
-        let _ = tx.send(ReportRecord {
-            file_name: name,
-            original_size,
-            final_size,
-            quality_value: quality_val,
-            quality_desc,
-        });
     }
 
     Ok(())

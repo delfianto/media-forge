@@ -36,7 +36,7 @@ enum Commands {
     /// Batch convert images with configurable quality and compression speed.
     /// Supports direct files and images inside ZIP/CBZ archives.
     /// Preserves directory structure and original modification times.
-    #[command(name = "image", alias = "img", visible_alias = "img")]
+    #[command(name = "image", visible_alias = "img")]
     Image(image::ImageArgs),
 
     /// Create CBZ comic book archives from image folders
@@ -44,14 +44,14 @@ enum Commands {
     /// Scans directories for image folders and creates properly formatted
     /// CBZ archives with natural sorting.
     /// Supports dry-run mode to preview operations before execution.
-    #[command(name = "archive", alias = "zip", visible_alias = "zip")]
+    #[command(name = "archive", visible_alias = "zip")]
     Archive(image::ArchiveArgs),
 
     /// Compare image quality using SSIMULACRA2
     ///
     /// Analyzes the quality of a distorted image compared to its original source.
     /// Provides a score from 0-100 with a quality rating.
-    #[command(name = "simulacra", alias = "qimg", visible_alias = "qimg")]
+    #[command(name = "simulacra", visible_alias = "qimg")]
     ImageQuality(image::QualityArgs),
 
     /// Encode videos to AV1 using NVIDIA hardware acceleration
@@ -59,7 +59,7 @@ enum Commands {
     /// Uses FFmpeg with NVIDIA NVENC for hardware-accelerated AV1 encoding.
     /// Requires an NVIDIA GPU with NVENC support (GTX 10-series or newer).
     /// Automatically skips videos already encoded in AV1.
-    #[command(name = "video", alias = "vid", visible_alias = "vid")]
+    #[command(name = "video", visible_alias = "vid")]
     Video(video::VideoArgs),
 
     /// Compare video quality using VMAF
@@ -67,7 +67,7 @@ enum Commands {
     /// Analyzes the quality of an encoded video compared to its original source.
     /// Provides mean, min, and max VMAF scores with a quality rating.
     /// Requires FFmpeg with libvmaf support.
-    #[command(name = "vmaf", alias = "qvid", visible_alias = "qvid")]
+    #[command(name = "vmaf", visible_alias = "qvid")]
     Quality(video::QualityArgs),
 }
 

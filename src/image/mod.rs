@@ -1,11 +1,30 @@
-use clap::Args as ClapArgs;
-use std::path::PathBuf;
-use thiserror::Error;
-
 pub mod archive;
 pub mod convert;
 pub mod quality;
 pub mod report;
+
+use clap::Args as ClapArgs;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+/// Helper to load images with AVIF fallback.
+pub fn load_image(path: &Path) -> anyhow::Result<image::DynamicImage> {
+    match image::open(path) {
+        Ok(img) => Ok(img),
+        Err(e) => {
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                if ext.eq_ignore_ascii_case("avif") {
+                    let file = std::fs::File::open(path)?;
+                    let reader = std::io::BufReader::new(file);
+                    return image::codecs::avif::AvifDecoder::new(reader)
+                        .and_then(|d| image::DynamicImage::from_decoder(d))
+                        .map_err(|e| anyhow::anyhow!("Failed to decode AVIF explicitly: {}", e));
+                }
+            }
+            Err(anyhow::anyhow!("Failed to open image {:?}: {}", path, e))
+        }
+    }
+}
 
 /// Unified error type for all image and archive operations.
 #[derive(Error, Debug)]
@@ -58,13 +77,17 @@ pub type Result<T> = std::result::Result<T, ImageError>;
 /// Command-line arguments for image quality analysis (SSIMULACRA2).
 #[derive(ClapArgs, Debug, Clone)]
 pub struct QualityArgs {
-    /// Original reference image
+    /// Original reference image or archive (CBZ)
     #[arg(value_name = "ORIGINAL")]
     pub original: PathBuf,
 
-    /// Distorted/encoded image to evaluate
+    /// Distorted/encoded image or directory
     #[arg(value_name = "DISTORTED")]
     pub distorted: PathBuf,
+
+    /// Target image format to look for in destination directory (if applicable)
+    #[arg(short, long, default_value = "avif", value_name = "FMT")]
+    pub format: String,
 }
 
 /// Command-line arguments for image conversion.
@@ -106,13 +129,9 @@ pub struct ImageArgs {
     #[arg(short, long, alias = "override")]
     pub overwrite: bool,
 
-    /// Disable CSV report generation
-    #[arg(long)]
-    pub no_report: bool,
-
-    /// Path to the CSV report file
-    #[arg(long, default_value = "conversion_report.csv")]
-    pub report_path: PathBuf,
+    /// Enable post-conversion quality report generation
+    #[arg(short, long)]
+    pub report: bool,
 }
 
 /// Command-line arguments for archive creation.
@@ -181,5 +200,5 @@ pub fn run_archive(args: ArchiveArgs) -> anyhow::Result<()> {
 
 /// Orchestrates the image quality analysis process.
 pub fn run_quality(args: QualityArgs) -> anyhow::Result<()> {
-    quality::run(args)
+    report::generate_conversion_report(&args.original, &args.distorted, &args.format)
 }
