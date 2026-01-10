@@ -1,6 +1,8 @@
 # AGENTS.md - LLM-Assisted Refactoring Guide for Media-Forge
 
 > **Purpose**: This document provides comprehensive guidance for LLM agents performing refactoring, bug fixes, feature additions, and code improvements on the media-forge codebase.
+>
+> **Last Updated**: 2026-01-10 (Post-Refactoring Analysis)
 
 ---
 
@@ -14,10 +16,11 @@
 6. [Error Handling](#error-handling)
 7. [Concurrency Model](#concurrency-model)
 8. [Dependencies](#dependencies)
-9. [Critical Refactoring Targets](#critical-refactoring-targets)
-10. [Testing Strategy](#testing-strategy)
-11. [Common Pitfalls](#common-pitfalls)
-12. [Code Style Guidelines](#code-style-guidelines)
+9. [Recent Refactoring Summary](#recent-refactoring-summary)
+10. [Remaining Refactoring Targets](#remaining-refactoring-targets)
+11. [Testing Strategy](#testing-strategy)
+12. [Common Pitfalls](#common-pitfalls)
+13. [Code Style Guidelines](#code-style-guidelines)
 
 ---
 
@@ -70,7 +73,7 @@
 │                        Processing Layer                                       │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐    │
 │  │ image/convert.rs │  │ image/archive.rs │  │ video/encode.rs          │    │
-│  │  - Task creation │  │  - CBZ creation  │  │  - FFmpeg spawning       │    │
+│  │  - Task creation │  │  - CBZ creation  │  │  - FfmpegCommandBuilder  │    │
 │  │  - AVIF/WebP enc │  │  - Verification  │  │  - Progress parsing      │    │
 │  │  - Parallel exec │  │  - Cleanup       │  │  - Process management    │    │
 │  └──────────────────┘  └──────────────────┘  └──────────────────────────┘    │
@@ -88,9 +91,10 @@
                                     │
                                     ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                              UI Layer (ui.rs)                                 │
+│                        Support Layers                                         │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐   │
-│  │ Progress Styles │  │ Spinner Styles  │  │ Multi-Progress Management  │   │
+│  │ ui.rs           │  │ constants.rs    │  │ video/builder.rs           │   │
+│  │ Progress Styles │  │ Magic Numbers   │  │ FFmpeg Command Builder     │   │
 │  └─────────────────┘  └─────────────────┘  └─────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -128,589 +132,60 @@
 
 ```
 media-forge/
-├── Cargo.toml              # Rust 2024 edition, dependencies
+├── Cargo.toml                 # Rust 2024 edition, dependencies
+├── AGENTS.md                  # This file - LLM guidance
 ├── src/
-│   ├── main.rs             # CLI entry point, command routing (92 lines)
-│   ├── lib.rs              # Core utilities, constants, ProcessManager (201 lines)
-│   ├── walker.rs           # File/archive scanning abstraction (181 lines)
-│   ├── ui.rs               # Progress bar styles and factories (61 lines)
+│   ├── main.rs                # CLI entry point, command routing (92 lines)
+│   ├── lib.rs                 # Core utilities, ProcessManager (234 lines)
+│   ├── constants.rs           # ✅ NEW: Extracted magic numbers (38 lines)
+│   ├── walker.rs              # File/archive scanning abstraction (286 lines)
+│   ├── ui.rs                  # Progress bar styles and factories (61 lines)
 │   ├── image/
-│   │   ├── mod.rs          # ImageError, Args structs, public API (208 lines)
-│   │   ├── convert.rs      # Image conversion pipeline (562 lines)
-│   │   ├── archive.rs      # CBZ archive creation (361 lines)
-│   │   ├── quality.rs      # SSIMULACRA2 scoring (~100 lines)
-│   │   └── report.rs       # Quality report generation (379 lines)
+│   │   ├── mod.rs             # ImageError, Args, ConversionSummary (247 lines)
+│   │   ├── convert.rs         # Image conversion pipeline (591 lines)
+│   │   ├── archive.rs         # CBZ archive creation (374 lines)
+│   │   ├── quality.rs         # SSIMULACRA2 scoring (~123 lines)
+│   │   └── report.rs          # Quality report generation (434 lines)
 │   └── video/
-│       ├── mod.rs          # VideoError, Args structs, metadata (231 lines)
-│       ├── encode.rs       # FFmpeg video encoding (292 lines)
-│       └── quality.rs      # VMAF quality analysis (268 lines)
-└── tests/                  # (Currently empty - needs population)
+│       ├── mod.rs             # VideoError, Args, metadata (269 lines)
+│       ├── builder.rs         # ✅ NEW: FFmpeg command builder (203 lines)
+│       ├── encode.rs          # FFmpeg video encoding (292 lines)
+│       └── quality.rs         # VMAF quality analysis (278 lines)
+└── tests/
+    ├── image_convert.rs       # ✅ NEW: Image conversion integration tests
+    └── archive_create.rs      # ✅ NEW: Archive creation integration tests
 ```
 
-### Lines of Code by Module
+### Lines of Code by Module (Updated)
 
 | Module | Lines | Purpose | Test Coverage |
 |--------|-------|---------|---------------|
-| `src/image/convert.rs` | 562 | Image conversion pipeline | ❌ None |
-| `src/image/report.rs` | 379 | Quality report generation | ❌ None |
-| `src/image/archive.rs` | 361 | CBZ archive creation | ❌ None |
-| `src/video/encode.rs` | 292 | FFmpeg video encoding | ❌ None |
-| `src/video/quality.rs` | 268 | VMAF analysis | ❌ None |
-| `src/video/mod.rs` | 231 | Video error types, metadata | ❌ None |
-| `src/image/mod.rs` | 208 | Image error types, args | ❌ None |
-| `src/lib.rs` | 201 | Core utilities | ✅ 5 tests |
-| `src/walker.rs` | 181 | File scanning | ❌ None |
+| `src/image/convert.rs` | 591 | Image conversion pipeline | ✅ Integration tests |
+| `src/image/report.rs` | 434 | Quality report generation | ✅ 1 unit test |
+| `src/image/archive.rs` | 374 | CBZ archive creation | ✅ Integration tests |
+| `src/video/encode.rs` | 292 | FFmpeg video encoding | ❌ None (requires FFmpeg) |
+| `src/walker.rs` | 286 | File/archive scanning | ✅ 4 unit tests |
+| `src/video/quality.rs` | 278 | VMAF analysis | ❌ None (requires FFmpeg) |
+| `src/video/mod.rs` | 269 | Video error types, metadata | ✅ 2 unit tests |
+| `src/image/mod.rs` | 247 | Image error types, args | ❌ None |
+| `src/lib.rs` | 234 | Core utilities | ✅ 8 unit tests |
+| `src/video/builder.rs` | 203 | FFmpeg command builder | ✅ 3 unit tests |
 | `src/main.rs` | 92 | CLI entry | ❌ None |
 | `src/ui.rs` | 61 | Progress styles | ❌ None |
+| `src/constants.rs` | 38 | Application constants | ❌ None |
 
-**Total**: ~2,836 lines with 5 unit tests (0.18% test coverage)
+**Total**: ~3,399 lines with **20+ tests** (significant improvement from 5 tests)
 
 ---
 
 ## Module Deep-Dive
 
-### `src/main.rs` - CLI Entry Point
+### `src/constants.rs` - Application Constants ✅ NEW
 
-**Responsibilities**:
-- MiMalloc global allocator initialization
-- Clap-based argument parsing
-- Ctrl+C handler registration
-- Command routing to appropriate modules
-
-**Key Code Patterns**:
-```rust
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;  // Performance optimization
-
-ctrlc::set_handler(move || {
-    ProcessManager::kill_all();      // Graceful shutdown
-    std::process::exit(130);
-}).expect("Error setting Ctrl-C handler");  // ⚠️ UNSAFE EXPECT
-```
-
-**Refactoring Notes**:
-- The `expect()` on line 81 should use proper error propagation
-- Consider extracting command routing to a separate function
-
----
-
-### `src/lib.rs` - Core Utilities
-
-**Key Components**:
-
-1. **Global Constants**:
-   ```rust
-   pub const IMAGE_EXTENSIONS: &[&str] = &["avif", "webp", "jpg", "jpeg", "png", "tiff", "bmp"];
-   pub const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cbz"];
-   pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v", "mpv", "webm"];
-   ```
-
-2. **ProcessManager** (lines 35-64):
-   - Thread-safe process PID tracking
-   - SIGKILL-based cleanup on shutdown
-   - Uses `Lazy<Mutex<HashSet<u32>>>` for storage
-
-3. **PathUtil** (lines 68-97):
-   - Path canonicalization
-   - Destination resolution
-   - Skip checking (existence + non-empty)
-
-4. **CpuControl** (lines 100-117):
-   - Thread count calculation
-   - Default: 75% of available cores
-   - Clamp: 1 to 150% of cores
-
-5. **Naming** (lines 120-160):
-   - Unicode-aware filename truncation
-   - Cover image heuristic detection
-
-**Magic Numbers to Extract**:
-```rust
-// Line 109: Hardcoded ratios
-let default_threads = (total_cpus as f64 * 0.75).ceil() as usize;  // → DEFAULT_CPU_RATIO
-let max_limit = (total_cpus as f64 * 1.5).ceil() as usize;         // → MAX_CPU_RATIO
-```
-
----
-
-### `src/walker.rs` - File Scanning
-
-**Core Abstraction**:
-```rust
-pub enum MediaSource {
-    Filesystem(PathBuf),           // Direct file on disk
-    Archive {
-        archive_path: PathBuf,     // Path to ZIP/CBZ
-        entry_name: String,        // Path inside archive
-    },
-}
-
-pub struct Asset {
-    pub path: PathBuf,             // Physical file path
-    pub source: MediaSource,       // Origin metadata
-}
-```
-
-**Scan Methods**:
-- `scan_flat()` - Returns flat `Vec<Asset>`
-- `scan_grouped()` - Returns `HashMap<PathBuf, Vec<Asset>>` by parent dir
-- `scan_with_progress()` - Includes progress bar updates
-
-**Refactoring Opportunities**:
-1. Add `FileSystem` trait for testability
-2. Extract archive scanning to separate method
-3. Add error collection instead of silent skipping
-
----
-
-### `src/image/convert.rs` - Image Conversion Pipeline
-
-**Pipeline Stages**:
-```
-1. collect_tasks()      → Parallel asset analysis, task generation
-2. process_tasks()      → Parallel task execution with progress
-3. process_single_task() → Individual image encoding
-4. encode_avif()        → AVIF encoding via ravif
-```
-
-**Task Types**:
-```rust
-pub(crate) enum TaskType {
-    File,                          // Standalone image file
-    Archive { internal_path: String }, // Image inside ZIP/CBZ
-    Copy,                          // Non-image file passthrough
-}
-```
-
-**Worker Thread Model** (lines 357-379):
-```rust
-fn spawn_workers<'a>(
-    scope: &'a std::thread::Scope<'a, '_>,
-    rx: Receiver<WorkItem>,
-    args: Arc<ImageArgs>,
-    spinner_pool: Arc<Mutex<Vec<ProgressBar>>>,
-    num_threads: usize,
-) {
-    for _ in 0..num_threads {
-        scope.spawn(move || {
-            while let Ok(item) = rx.recv() {
-                if SHUTDOWN.load(Ordering::SeqCst) { return; }
-                process_work_item(item, &args, &spinner_pool);
-            }
-        });
-    }
-}
-```
-
-**Critical Unsafe Code** (lines 551-553):
-```rust
-// AVIF encoding with unsafe pointer cast
-let rgba_pixels = unsafe {
-    std::slice::from_raw_parts(pixels.as_ptr() as *const ravif::RGBA8, pixels.len() / 4)
-};
-```
-⚠️ **Refactoring Target**: This can be replaced with safe alternatives from the `rgb` crate.
-
-**Unsafe Unwraps** (HIGH PRIORITY):
-- Line 128, 180, 217, 343, 401, 417: `spinner_pool.lock().unwrap()`
-- Line 245, 263: `path.file_name().unwrap()`
-
----
-
-### `src/image/archive.rs` - CBZ Archive Creation
-
-**Key Features**:
-- Natural sorting via `natord` crate
-- Archive verification before deletion
-- Dry-run mode support
-- Explicit "DELETE" confirmation for cleanup
-
-**Verification Logic** (simplified):
-```rust
-fn verify_archive(archive_path: &Path, expected_count: usize) -> Result<()> {
-    let file = fs::File::open(archive_path)?;
-    let archive = ZipArchive::new(file)?;
-    if archive.len() != expected_count {
-        return Err(ImageError::VerificationFailed(archive_path.to_path_buf()));
-    }
-    Ok(())
-}
-```
-
----
-
-### `src/video/encode.rs` - FFmpeg Video Encoding
-
-**FFmpeg Command Construction** (lines 207-237):
-```rust
-let mut cmd = Command::new("ffmpeg");
-cmd.args([
-    "-y",                           // Overwrite output
-    "-hide_banner",
-    "-loglevel", "error",
-    "-stats",                       // Enable progress output
-    "-hwaccel", "cuda",             // NVIDIA hardware acceleration
-    "-hwaccel_output_format", "cuda",
-    "-i", src_str,
-    "-c:v", "av1_nvenc",            // AV1 NVENC encoder
-    "-preset", &args.preset,        // p1-p7
-    "-tune", "hq",                  // High quality tuning
-    "-cq", &args.cq.to_string(),    // Constant quality (1-51)
-    "-c:a", "copy",                 // Copy audio stream
-]);
-```
-
-**Progress Parsing** (lines 264-270):
-```rust
-// Regex: r"time=(\d+):(\d+):(\d+\.\d+)"
-if let Some(caps) = FFMPEG_PROGRESS_RE.captures(&line) {
-    let h: u64 = caps[1].parse().unwrap_or(0);
-    let m: u64 = caps[2].parse().unwrap_or(0);
-    let s: f64 = caps[3].parse().unwrap_or(0.0);
-    let seconds = (h * 3600 + m * 60) as f64 + s;
-    pb.set_position(seconds as u64);
-}
-```
-
-**Refactoring Opportunity**: Extract FFmpeg command building to a `FfmpegCommandBuilder` struct.
-
----
-
-### `src/video/quality.rs` - VMAF Analysis
-
-**FFmpeg VMAF Filter**:
-```rust
-// Constructs: [0:v]scale=...[ref];[1:v]scale=...[dist];[ref][dist]libvmaf=...
-let filter = format!(
-    "[0:v]scale=-1:{}:flags=bicubic[ref];[1:v]scale=-1:{}:flags=bicubic[dist];[ref][dist]libvmaf=log_fmt=json:log_path={}:n_threads={}:n_subsample={}",
-    scale, scale, log_path, threads, subsample
-);
-```
-
-**Unsafe Unwraps** (MEDIUM PRIORITY):
-- Line 135, 148: `path.to_str().unwrap()`
-
----
-
-## Key Patterns and Conventions
-
-### 1. Error Type Pattern
-
-Each module defines its own error type using `thiserror`:
+All magic numbers have been extracted to a centralized constants module:
 
 ```rust
-#[derive(Error, Debug)]
-pub enum ImageError {
-    #[error("Source path does not exist: {0:?}")]
-    SourceNotFound(PathBuf),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),  // Auto-conversion via From trait
-    // ...
-}
-
-pub type Result<T> = std::result::Result<T, ImageError>;
-```
-
-### 2. Progress Bar Pattern
-
-```rust
-let mp = MultiProgress::new();              // Container for multiple bars
-let pb_main = mp.add(ProgressBar::new(n));  // Main progress bar
-pb_main.set_style(ui::main_bar_style());    // Apply consistent styling
-
-// In worker threads:
-pb_main.inc(1);                             // Thread-safe increment
-```
-
-### 3. Parallel Processing Pattern
-
-```rust
-use rayon::prelude::*;
-
-let results: Vec<_> = items
-    .par_iter()                              // Parallel iterator
-    .map(|item| process(item))               // Map in parallel
-    .collect();                              // Collect results
-```
-
-### 4. Channel-Based Work Distribution
-
-```rust
-let (tx, rx) = bounded::<WorkItem>(num_threads * 2);  // Bounded channel
-
-// Producer thread
-for task in tasks {
-    tx.send(WorkItem { task, ... })?;
-}
-drop(tx);  // Signal completion
-
-// Worker threads
-while let Ok(item) = rx.recv() {
-    process(item);
-}
-```
-
-### 5. Graceful Shutdown Pattern
-
-```rust
-// Check before starting work
-if SHUTDOWN.load(Ordering::SeqCst) {
-    return;
-}
-
-// Check during long operations
-while reader.read_until(b'\r', &mut buffer)? > 0 {
-    if SHUTDOWN.load(Ordering::SeqCst) {
-        let _ = child.kill();
-        break;
-    }
-    // ... process
-}
-```
-
----
-
-## Error Handling
-
-### Error Type Hierarchy
-
-```
-anyhow::Result<()>          ← Main entry points return this
-    ↑
-    │ map_err()
-    │
-ImageError / VideoError     ← Domain-specific errors
-    ↑
-    │ #[from] or map_err()
-    │
-std::io::Error              ← Low-level errors
-zip::result::ZipError
-image::ImageError
-serde_json::Error
-```
-
-### Error Propagation Patterns
-
-**Good Pattern** (used throughout):
-```rust
-let source_path = fs::canonicalize(&args.source)
-    .map_err(|_| ImageError::SourceNotFound(args.source.clone()))?;
-```
-
-**Problematic Pattern** (needs refactoring):
-```rust
-// Silent error swallowing in parallel contexts
-if let Err(e) = process_single_task(&item, args) {
-    eprintln!("Error processing {}: {}", name_display, e);
-}
-// Processing continues, no error aggregation
-```
-
-### Recommended Error Aggregation
-
-```rust
-pub struct BatchResult {
-    pub succeeded: usize,
-    pub failed: usize,
-    pub errors: Vec<(PathBuf, ImageError)>,
-}
-
-impl BatchResult {
-    pub fn exit_code(&self) -> i32 {
-        if self.failed > 0 { 1 } else { 0 }
-    }
-
-    pub fn summary(&self) -> String {
-        format!("{} succeeded, {} failed", self.succeeded, self.failed)
-    }
-}
-```
-
----
-
-## Concurrency Model
-
-### Thread Pool Configuration
-
-| Context | Thread Count | Rationale |
-|---------|--------------|-----------|
-| Image conversion | 75% of cores | CPU-bound, leave headroom |
-| Video encoding | User-specified (default 1) | GPU memory limited |
-| Task collection | min(cores/2, 8) | I/O bound scanning |
-
-### Synchronization Primitives
-
-| Primitive | Location | Purpose |
-|-----------|----------|---------|
-| `AtomicBool` | `lib.rs:20` | Global shutdown flag |
-| `Mutex<HashSet<u32>>` | `lib.rs:32` | Active process PIDs |
-| `Mutex<Vec<ProgressBar>>` | `convert.rs:103` | Spinner pool |
-| `AtomicUsize` | `convert.rs:108` | File counter |
-| `crossbeam_channel::bounded` | `convert.rs:335` | Work distribution |
-| `crossbeam_channel::unbounded` | `convert.rs:440` | Completion signals |
-
-### Potential Race Conditions
-
-1. **Spinner pool contention** (convert.rs):
-   - Multiple threads compete for spinners
-   - Mitigated by pool size matching thread count
-
-2. **Process kill during encoding** (encode.rs):
-   - Ctrl+C can trigger while FFmpeg is running
-   - Mitigated by ProcessManager tracking
-
----
-
-## Dependencies
-
-### Core Dependencies
-
-| Crate | Version | Purpose | Notes |
-|-------|---------|---------|-------|
-| `clap` | 4.5 | CLI argument parsing | derive feature |
-| `rayon` | 1.11 | Data parallelism | Thread pool management |
-| `crossbeam-channel` | 0.5.15 | MPMC channels | Work distribution |
-| `indicatif` | 0.18 | Progress bars | rayon feature |
-| `thiserror` | 2.0 | Error derive macros | |
-| `anyhow` | 1.0 | Error context | Top-level errors |
-
-### Image Processing
-
-| Crate | Version | Purpose | Notes |
-|-------|---------|---------|-------|
-| `image` | 0.25 | Image loading/saving | avif-native, webp features |
-| `ravif` | 0.12 | AVIF encoding | High-performance encoder |
-| `ssimulacra2` | 0.5.1 | Image quality metric | |
-
-### File Handling
-
-| Crate | Version | Purpose | Notes |
-|-------|---------|---------|-------|
-| `walkdir` | 2.5 | Directory traversal | |
-| `zip` | 2.4 | ZIP/CBZ handling | |
-| `natord` | 1.0 | Natural sorting | Comic page ordering |
-
-### Utilities
-
-| Crate | Version | Purpose | Notes |
-|-------|---------|---------|-------|
-| `mimalloc` | 0.1 | Memory allocator | v3 feature |
-| `once_cell` | 1.21 | Lazy statics | Regex caching |
-| `regex` | 1.12 | Pattern matching | FFmpeg output parsing |
-| `serde` / `serde_json` | 1.0 | JSON handling | ffprobe output |
-| `ctrlc` | 3.4 | Signal handling | Graceful shutdown |
-
-### Dev Dependencies
-
-| Crate | Version | Purpose | Notes |
-|-------|---------|---------|-------|
-| `tempfile` | 3.10 | Temporary directories | **Currently unused** |
-
----
-
-## Critical Refactoring Targets
-
-### Priority 1: Unsafe Unwrap Removal (23 instances)
-
-| Location | Pattern | Risk | Suggested Fix |
-|----------|---------|------|---------------|
-| `main.rs:81` | `.expect("Error setting Ctrl-C handler")` | CRITICAL | Return `Result` from main setup |
-| `convert.rs:128,180,217,343,401,417` | `spinner_pool.lock().unwrap()` | HIGH | Use `lock().ok()` or propagate error |
-| `convert.rs:245,263` | `file_name().unwrap()` | MEDIUM | Use `ok_or_else()` |
-| `video/quality.rs:135,148` | `to_str().unwrap()` | MEDIUM | Use `ok_or(VideoError::InvalidPath)` |
-| `ui.rs:11,18,25,34,42,50` | `.expect("Invalid template")` | LOW | Safe - hardcoded strings |
-
-**Example Fix**:
-```rust
-// Before
-let pool = spinner_pool.lock().unwrap();
-
-// After
-let pool = spinner_pool.lock().map_err(|_| ImageError::LockPoisoned)?;
-
-// Or if in non-Result context
-let Some(pool) = spinner_pool.lock().ok() else { return; };
-```
-
-### Priority 2: Add Comprehensive Tests
-
-**Test Categories Needed**:
-
-1. **Unit Tests** (~50 tests estimated):
-   ```rust
-   // src/lib.rs tests
-   #[test] fn test_cpu_control_default_threads() { ... }
-   #[test] fn test_cpu_control_clamp_limits() { ... }
-   #[test] fn test_path_util_resolve_absolute() { ... }
-   #[test] fn test_path_util_resolve_relative() { ... }
-   #[test] fn test_path_util_should_skip_existing() { ... }
-   ```
-
-2. **Integration Tests** (~20 tests estimated):
-   ```rust
-   // tests/image_convert.rs
-   #[test] fn test_jpeg_to_avif_basic() { ... }
-   #[test] fn test_png_to_webp_with_alpha() { ... }
-   #[test] fn test_cbz_extraction_and_convert() { ... }
-   #[test] fn test_overwrite_existing_file() { ... }
-   #[test] fn test_preserve_mtime() { ... }
-   ```
-
-3. **Mock-Based Tests**:
-   ```rust
-   // Trait for filesystem abstraction
-   trait FileSystem {
-       fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>>;
-       fn read_file(&self, path: &Path) -> io::Result<Vec<u8>>;
-       fn write_file(&self, path: &Path, data: &[u8]) -> io::Result<()>;
-   }
-
-   struct MockFileSystem {
-       files: HashMap<PathBuf, Vec<u8>>,
-   }
-   ```
-
-### Priority 3: Error Aggregation
-
-**Current Behavior**:
-- Errors logged via `eprintln!()`
-- Processing continues
-- Exit code always 0
-
-**Desired Behavior**:
-```rust
-pub struct ConversionSummary {
-    pub total: usize,
-    pub succeeded: usize,
-    pub skipped: usize,
-    pub failed: Vec<(PathBuf, String)>,
-}
-
-impl ConversionSummary {
-    pub fn print_summary(&self) {
-        println!("Processed {} files:", self.total);
-        println!("  ✓ {} succeeded", self.succeeded);
-        println!("  → {} skipped", self.skipped);
-        if !self.failed.is_empty() {
-            println!("  ✗ {} failed:", self.failed.len());
-            for (path, error) in &self.failed {
-                println!("    - {:?}: {}", path, error);
-            }
-        }
-    }
-
-    pub fn exit_code(&self) -> i32 {
-        if self.failed.is_empty() { 0 } else { 1 }
-    }
-}
-```
-
-### Priority 4: Extract Magic Numbers
-
-**Create `src/constants.rs`**:
-```rust
-//! Application-wide constants
+//! Application-wide constants used across the media-forge project.
 
 /// Default CPU utilization ratio (75%)
 pub const DEFAULT_CPU_RATIO: f64 = 0.75;
@@ -727,59 +202,294 @@ pub const MAX_ANALYSIS_SPINNERS: usize = 8;
 /// Report channel buffer size
 pub const REPORT_CHANNEL_CAPACITY: usize = 1000;
 
-/// VMAF error log path
-pub const VMAF_ERROR_LOG: &str = "/tmp/media-forge-vmaf-error.log";
+/// VMAF error log path (relative, not /tmp)
+pub const VMAF_ERROR_LOG: &str = "media-forge-vmaf-error.log";
 
-/// Progress bar tick interval
+/// Progress bar tick interval in milliseconds
 pub const SPINNER_TICK_MS: u64 = 100;
+
+/// Default quality for image conversion
+pub const DEFAULT_IMAGE_QUALITY: u8 = 72;
+
+/// Default speed for AVIF encoding
+pub const DEFAULT_AVIF_SPEED: u8 = 4;
+
+/// Default recursion depth for file scanning
+pub const DEFAULT_RECURSION_DEPTH: usize = 2;
+
+/// Default CQ level for video encoding
+pub const DEFAULT_VIDEO_CQ: u8 = 28;
+
+/// Default VMAF analysis duration in seconds
+pub const DEFAULT_VMAF_DURATION: u64 = 60;
 ```
 
-### Priority 5: FFmpeg Command Builder
+**Usage Pattern**:
+```rust
+use crate::constants::{DEFAULT_CPU_RATIO, MAX_CPU_RATIO, CHANNEL_BUFFER_MULTIPLIER};
+```
+
+---
+
+### `src/video/builder.rs` - FFmpeg Command Builder ✅ NEW
+
+A fluent API for constructing FFmpeg commands:
 
 ```rust
-pub struct FfmpegCommand {
-    input: PathBuf,
-    output: PathBuf,
-    hwaccel: Option<HwAccel>,
-    video_codec: VideoCodec,
-    audio_codec: AudioCodec,
-    preset: String,
-    quality: u8,
-}
-
 pub enum HwAccel {
     Cuda,
-    Vaapi,
-    None,
 }
 
 pub enum VideoCodec {
     Av1Nvenc,
-    Hevc,
-    H264,
-    Copy,
 }
 
-impl FfmpegCommand {
-    pub fn builder() -> FfmpegCommandBuilder { ... }
+pub struct FfmpegCommandBuilder {
+    input: PathBuf,
+    output: PathBuf,
+    hwaccel: Option<HwAccel>,
+    video_codec: Option<VideoCodec>,
+    preset: Option<String>,
+    cq: Option<u8>,
+    extra_args: Vec<String>,
+    start_time: Option<u64>,
+    duration: Option<f64>,
+}
 
-    pub fn into_command(self) -> Command {
-        let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-y").arg("-hide_banner");
+impl FfmpegCommandBuilder {
+    pub fn new(input: &Path, output: &Path) -> Self { ... }
+    pub fn hwaccel(mut self, hwaccel: HwAccel) -> Self { ... }
+    pub fn video_codec(mut self, codec: VideoCodec) -> Self { ... }
+    pub fn preset(mut self, preset: &str) -> Self { ... }
+    pub fn cq(mut self, cq: u8) -> Self { ... }
+    pub fn start_time(mut self, seconds: u64) -> Self { ... }
+    pub fn duration(mut self, seconds: f64) -> Self { ... }
+    pub fn arg(mut self, arg: &str) -> Self { ... }
+    pub fn args<I, S>(mut self, args: I) -> Self { ... }
+    pub fn build(self) -> Command { ... }
+}
+```
 
-        if let Some(hwaccel) = &self.hwaccel {
-            match hwaccel {
-                HwAccel::Cuda => {
-                    cmd.args(["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]);
-                }
-                // ...
+**Usage in encode.rs**:
+```rust
+let mut builder = FfmpegCommandBuilder::new(&task.src, &task.dest)
+    .hwaccel(HwAccel::Cuda)
+    .video_codec(VideoCodec::Av1Nvenc)
+    .preset(&args.preset)
+    .cq(args.cq)
+    .args(["-tune", "hq", "-c:a", "copy"]);
+
+if args.ext == "mp4" {
+    builder = builder.args(["-c:s", "mov_text"]);
+}
+
+let mut cmd = builder.build();
+```
+
+**Tests** (3 unit tests):
+- `test_builder_basic` - Core functionality
+- `test_builder_time_and_duration` - Time-based options
+- `test_builder_extra_args` - Additional argument handling
+
+---
+
+### `src/main.rs` - CLI Entry Point (Improved)
+
+**Key Improvement**: Now uses `try_set_handler()` with proper error propagation:
+
+```rust
+fn main() -> Result<()> {
+    ctrlc::try_set_handler(move || {
+        eprintln!("\n\x1b[31m[Interrupt] Shutting down...\x1b[0m");
+        ProcessManager::kill_all();
+        std::process::exit(130);
+    })?;  // ✅ Now uses ? instead of .expect()
+
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Image(args) => image::run(args),
+        Commands::Archive(args) => image::run_archive(args),
+        // ...
+    }
+}
+```
+
+---
+
+### `src/image/mod.rs` - ConversionSummary ✅ NEW
+
+Error aggregation is now implemented:
+
+```rust
+/// Holds aggregated results of a batch conversion process.
+pub struct ConversionSummary {
+    /// Total number of assets processed.
+    pub total: usize,
+    /// Number of successfully converted files.
+    pub succeeded: usize,
+    /// Number of files skipped (e.g., already exists).
+    pub skipped: usize,
+    /// List of paths and their associated error messages for failed conversions.
+    pub failed: Vec<(PathBuf, String)>,
+}
+
+impl ConversionSummary {
+    /// Prints a formatted summary of the conversion results to the console.
+    pub fn print_summary(&self) {
+        println!("\n{}", "=".repeat(50));
+        println!("Conversion Summary:");
+        println!("  Total Assets: {}", self.total);
+        println!("  ✓ Succeeded:  {}", self.succeeded);
+        println!("  → Skipped:    {}", self.skipped);
+        if !self.failed.is_empty() {
+            println!("  ✗ Failed:     {}", self.failed.len());
+            for (path, error) in &self.failed {
+                println!("    - {:?}: {}", path, error);
             }
         }
-
-        cmd.args(["-i", self.input.to_str().unwrap()]);
-        // ... build rest of command
-        cmd
+        println!("{}\n", "=".repeat(50));
     }
+
+    /// Returns a non-zero exit code if any conversions failed.
+    pub fn exit_code(&self) -> i32 {
+        if self.failed.is_empty() { 0 } else { 1 }
+    }
+}
+```
+
+---
+
+### `src/walker.rs` - File Scanning (Enhanced)
+
+Now includes comprehensive unit tests:
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test] fn test_walker_scan_flat() { ... }      // Basic file scanning
+    #[test] fn test_walker_recursive() { ... }      // Recursive directory traversal
+    #[test] fn test_walker_archive_inspection() { ... }  // ZIP/CBZ content scanning
+    #[test] fn test_scan_grouped() { ... }          // Grouping by parent directory
+}
+```
+
+---
+
+### `src/image/convert.rs` - Image Conversion Pipeline (Improved)
+
+**Key Improvements**:
+
+1. **Safe mutex locking** (line 131-133):
+```rust
+let pool = spinner_pool
+    .lock()
+    .map_err(|_| ImageError::Io(std::io::Error::other("Lock poisoned")))?;
+```
+
+2. **Safe spinner pool access** (line 182, 216-220, 425, 437-443):
+```rust
+let pb_opt = spinner_pool.lock().ok().and_then(|mut pool| pool.pop());
+
+// Return spinner to pool safely
+if let Some(pb) = pb_opt
+    && let Ok(mut pool) = spinner_pool.lock()
+{
+    pool.push(pb);
+}
+```
+
+3. **Error aggregation** (line 365-379):
+```rust
+let mut summary = ConversionSummary {
+    total: total_files,
+    succeeded: 0,
+    skipped: 0,
+    failed: Vec::new(),
+};
+
+while let Ok((path, res)) = results_rx.try_recv() {
+    match res {
+        Ok(()) => summary.succeeded += 1,
+        Err(e) => summary.failed.push((path, e.to_string())),
+    }
+}
+```
+
+**Remaining Unsafe Code** (line 579-581):
+```rust
+// AVIF encoding with unsafe pointer cast - STILL NEEDS REVIEW
+let rgba_pixels = unsafe {
+    std::slice::from_raw_parts(pixels.as_ptr() as *const ravif::RGBA8, pixels.len() / 4)
+};
+```
+
+---
+
+## Recent Refactoring Summary
+
+### ✅ Completed Improvements
+
+| Priority | Issue | Status | Details |
+|----------|-------|--------|---------|
+| P1 | Unsafe unwrap in main.rs | ✅ FIXED | Now uses `try_set_handler()?` |
+| P1 | Mutex lock unwraps | ✅ FIXED | Now uses `.lock().ok()` or `.map_err()` |
+| P2 | Add integration tests | ✅ DONE | 2 test files, multiple tests |
+| P3 | Error aggregation | ✅ DONE | `ConversionSummary` implemented |
+| P4 | Extract magic numbers | ✅ DONE | `src/constants.rs` created |
+| P5 | FFmpeg command builder | ✅ DONE | `src/video/builder.rs` created |
+
+### Test Coverage Improvement
+
+| Before | After |
+|--------|-------|
+| 5 unit tests | 20+ tests |
+| 0 integration tests | 2 integration test files |
+| ~0.18% coverage | Significantly improved |
+
+---
+
+## Remaining Refactoring Targets
+
+### Priority 1: Remaining Unsafe Code
+
+| Location | Pattern | Risk | Suggested Fix |
+|----------|---------|------|---------------|
+| `image/convert.rs:579-581` | `unsafe { std::slice::from_raw_parts(...) }` | MEDIUM | Use safe `bytemuck` or `rgb` crate |
+| `image/report.rs:76` | `.expect("Reporter already finished")` | MEDIUM | Return `Option` or `Result` |
+| `image/report.rs:324` | `file_name().unwrap()` | LOW | Use `unwrap_or_default()` |
+| `video/encode.rs:116` | `file_name().unwrap()` | LOW | Use `unwrap_or_default()` |
+
+### Priority 2: Add More Tests
+
+**Still Needed**:
+1. **Video encoding tests** (requires FFmpeg mock or skip in CI)
+2. **VMAF analysis tests** (requires FFmpeg with libvmaf)
+3. **Error path tests** (invalid inputs, permission errors)
+4. **Edge case tests** (empty directories, corrupt archives)
+
+### Priority 3: Documentation
+
+1. Add `#[doc]` comments to public APIs in `constants.rs`
+2. Add usage examples in module-level documentation
+3. Consider generating API docs with `cargo doc`
+
+### Priority 4: Extend FFmpeg Builder
+
+The current builder supports CUDA/AV1 only. Consider adding:
+```rust
+pub enum HwAccel {
+    Cuda,
+    Vaapi,      // For AMD/Intel
+    Qsv,        // Intel QuickSync
+    None,       // Software encoding
+}
+
+pub enum VideoCodec {
+    Av1Nvenc,
+    HevcNvenc,
+    H264Nvenc,
+    Libx265,    // Software
+    Copy,
 }
 ```
 
@@ -787,196 +497,197 @@ impl FfmpegCommand {
 
 ## Testing Strategy
 
-### Test File Structure
+### Current Test Structure
 
 ```
 tests/
-├── common/
-│   └── mod.rs              # Shared test utilities
-├── integration/
-│   ├── image_convert.rs    # Image conversion tests
-│   ├── archive_create.rs   # CBZ creation tests
-│   └── video_encode.rs     # Video encoding tests (requires FFmpeg)
-└── unit/
-    ├── walker_test.rs      # File scanning tests
-    ├── naming_test.rs      # Filename utility tests
-    └── path_util_test.rs   # Path resolution tests
+├── image_convert.rs     # ✅ Integration tests for image conversion
+│   ├── test_image_conversion_integration()
+│   └── test_image_conversion_preserve_mtime()
+└── archive_create.rs    # ✅ Integration tests for CBZ creation
+    └── test_archive_creation_integration()
+
+src/
+├── lib.rs               # 8 unit tests
+├── walker.rs            # 4 unit tests
+├── video/
+│   ├── mod.rs           # 2 unit tests (regex parsing)
+│   └── builder.rs       # 3 unit tests
+└── image/
+    └── report.rs        # 1 unit test
 ```
 
-### Test Utilities
+### Running Tests
+
+```bash
+# Run all tests (requires dav1d library for AVIF)
+cargo test
+
+# Run specific test file
+cargo test --test image_convert
+
+# Run with verbose output
+cargo test -- --nocapture
+
+# Skip tests requiring external dependencies
+cargo test --features skip-external-deps
+```
+
+### System Dependencies for Tests
+
+| Dependency | Required For | Installation |
+|------------|--------------|--------------|
+| `dav1d` | AVIF decoding | `apt install libdav1d-dev` |
+| `FFmpeg` | Video tests | `apt install ffmpeg` |
+| `libvmaf` | VMAF tests | Build FFmpeg with `--enable-libvmaf` |
+
+---
+
+## Key Patterns and Conventions
+
+### 1. Constants Usage Pattern
 
 ```rust
-// tests/common/mod.rs
-use std::path::PathBuf;
-use tempfile::TempDir;
+// Import from centralized constants
+use crate::constants::{
+    DEFAULT_CPU_RATIO,
+    MAX_CPU_RATIO,
+    CHANNEL_BUFFER_MULTIPLIER,
+    DEFAULT_IMAGE_QUALITY,
+};
 
-pub struct TestFixture {
-    pub temp_dir: TempDir,
-    pub source_dir: PathBuf,
-    pub dest_dir: PathBuf,
-}
+// Use in code
+let default_threads = (total_cpus as f64 * DEFAULT_CPU_RATIO).ceil() as usize;
+let (tx, rx) = bounded::<WorkItem>(num_threads * CHANNEL_BUFFER_MULTIPLIER);
+```
 
-impl TestFixture {
-    pub fn new() -> Self {
-        let temp_dir = TempDir::new().unwrap();
-        let source_dir = temp_dir.path().join("source");
-        let dest_dir = temp_dir.path().join("dest");
-        std::fs::create_dir_all(&source_dir).unwrap();
-        std::fs::create_dir_all(&dest_dir).unwrap();
-        Self { temp_dir, source_dir, dest_dir }
-    }
+### 2. Safe Mutex Access Pattern
 
-    pub fn create_test_image(&self, name: &str, width: u32, height: u32) -> PathBuf {
-        let path = self.source_dir.join(name);
-        let img = image::RgbImage::new(width, height);
-        img.save(&path).unwrap();
-        path
-    }
+```rust
+// For fallible operations - use .ok() with and_then
+let pb_opt = spinner_pool.lock().ok().and_then(|mut pool| pool.pop());
+
+// For operations that must succeed - use map_err
+let pool = spinner_pool
+    .lock()
+    .map_err(|_| ImageError::Io(std::io::Error::other("Lock poisoned")))?;
+
+// For fire-and-forget operations
+if let Ok(mut pool) = spinner_pool.lock() {
+    pool.push(pb);
 }
 ```
 
-### Example Integration Test
+### 3. FFmpeg Command Builder Pattern
 
 ```rust
-// tests/integration/image_convert.rs
-use media_forge::image::{ImageArgs, run};
-use crate::common::TestFixture;
+// Fluent API for building FFmpeg commands
+let cmd = FfmpegCommandBuilder::new(input, output)
+    .hwaccel(HwAccel::Cuda)
+    .video_codec(VideoCodec::Av1Nvenc)
+    .preset("p6")
+    .cq(28)
+    .args(["-tune", "hq"])
+    .duration(60.0)
+    .build();
+```
 
-#[test]
-fn test_jpeg_to_avif_preserves_dimensions() {
-    let fixture = TestFixture::new();
-    let source = fixture.create_test_image("test.jpg", 1920, 1080);
+### 4. Error Aggregation Pattern
 
-    let args = ImageArgs {
-        source: fixture.source_dir.clone(),
-        destination: fixture.dest_dir.clone(),
-        format: "avif".to_string(),
-        quality: 72,
-        speed: 4,
-        depth: 1,
-        jobs: Some(1),
-        no_mtime: true,
-        overwrite: false,
-        report: false,
-    };
+```rust
+// Collect errors during parallel processing
+let (results_tx, results_rx) = unbounded::<(PathBuf, Result<()>)>();
 
-    run(args).unwrap();
+// In worker thread
+let _ = results_tx.send((path.clone(), result));
 
-    let output = fixture.dest_dir.join("test.avif");
-    assert!(output.exists());
-
-    let img = image::open(&output).unwrap();
-    assert_eq!(img.dimensions(), (1920, 1080));
+// After processing
+let mut summary = ConversionSummary::default();
+while let Ok((path, res)) = results_rx.try_recv() {
+    match res {
+        Ok(()) => summary.succeeded += 1,
+        Err(e) => summary.failed.push((path, e.to_string())),
+    }
 }
+summary.print_summary();
+std::process::exit(summary.exit_code());
 ```
 
 ---
 
 ## Common Pitfalls
 
-### 1. Forgetting to Check SHUTDOWN Flag
+### 1. Forgetting to Use Constants
 
 **Wrong**:
 ```rust
-for task in tasks {
-    process(task);  // Won't stop on Ctrl+C
+let default_threads = (total_cpus as f64 * 0.75).ceil() as usize;  // Magic number!
+```
+
+**Correct**:
+```rust
+use crate::constants::DEFAULT_CPU_RATIO;
+let default_threads = (total_cpus as f64 * DEFAULT_CPU_RATIO).ceil() as usize;
+```
+
+### 2. Not Using the FFmpeg Builder
+
+**Wrong**:
+```rust
+let mut cmd = Command::new("ffmpeg");
+cmd.args(["-y", "-hide_banner", "-hwaccel", "cuda", ...]);  // Manual construction
+```
+
+**Correct**:
+```rust
+let cmd = FfmpegCommandBuilder::new(input, output)
+    .hwaccel(HwAccel::Cuda)
+    .video_codec(VideoCodec::Av1Nvenc)
+    .build();
+```
+
+### 3. Ignoring ConversionSummary
+
+**Wrong**:
+```rust
+// Silently succeed even if some files failed
+Ok(())
+```
+
+**Correct**:
+```rust
+summary.print_summary();
+if summary.exit_code() != 0 {
+    return Err(anyhow::anyhow!("Some conversions failed"));
 }
+Ok(())
+```
+
+### 4. Using .unwrap() Instead of Safe Alternatives
+
+**Wrong**:
+```rust
+spinner_pool.lock().unwrap()
 ```
 
 **Correct**:
 ```rust
-for task in tasks {
-    if SHUTDOWN.load(Ordering::SeqCst) {
-        break;
-    }
-    process(task);
-}
-```
-
-### 2. Not Registering Child Processes
-
-**Wrong**:
-```rust
-let child = Command::new("ffmpeg").spawn()?;
-// If Ctrl+C happens, ffmpeg keeps running
-```
-
-**Correct**:
-```rust
-let child = Command::new("ffmpeg").spawn()?;
-ProcessManager::register(child.id());
-// ... use child ...
-ProcessManager::unregister(child.id());
-```
-
-### 3. Swallowing Errors in Parallel Contexts
-
-**Wrong**:
-```rust
-items.par_iter().for_each(|item| {
-    let _ = process(item);  // Errors lost
-});
-```
-
-**Better**:
-```rust
-let errors: Vec<_> = items
-    .par_iter()
-    .filter_map(|item| process(item).err())
-    .collect();
-if !errors.is_empty() {
-    // Handle or report errors
-}
-```
-
-### 4. Using unwrap() on User-Provided Paths
-
-**Wrong**:
-```rust
-let name = path.file_name().unwrap().to_str().unwrap();
-```
-
-**Correct**:
-```rust
-let name = path
-    .file_name()
-    .and_then(|n| n.to_str())
-    .ok_or_else(|| ImageError::InvalidFilename(path.to_path_buf()))?;
-```
-
-### 5. Hardcoding Progress Bar Templates
-
-**Wrong**:
-```rust
-pb.set_style(ProgressStyle::default_bar()
-    .template("{bar:40} {pos}/{len}")
-    .unwrap());  // Duplicated everywhere
-```
-
-**Correct**:
-```rust
-pb.set_style(ui::main_bar_style());  // Centralized in ui.rs
+spinner_pool.lock().ok()  // Returns Option
+// or
+spinner_pool.lock().map_err(|_| MyError::LockPoisoned)?  // Returns Result
 ```
 
 ---
 
 ## Code Style Guidelines
 
-### Naming Conventions
-
-| Type | Convention | Example |
-|------|------------|---------|
-| Functions | snake_case | `process_single_task` |
-| Types | PascalCase | `ImageError`, `VideoTask` |
-| Constants | SCREAMING_SNAKE | `IMAGE_EXTENSIONS` |
-| Module-private items | Leading underscore optional | `_internal_helper` |
-| Type aliases | PascalCase | `Result<T>` |
-
-### Import Organization
+### Import Organization (Updated)
 
 ```rust
-// 1. Crate-level imports
-use crate::image::{ImageArgs, ImageError};
+// 1. Crate-level imports (including constants)
+use crate::constants::{DEFAULT_CPU_RATIO, CHANNEL_BUFFER_MULTIPLIER};
+use crate::image::{ImageArgs, ImageError, ConversionSummary};
+use crate::video::builder::{FfmpegCommandBuilder, HwAccel, VideoCodec};
 use crate::walker::Walker;
 use crate::{CpuControl, PathUtil, SHUTDOWN};
 
@@ -990,49 +701,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-```
-
-### Documentation Standards
-
-```rust
-/// Converts a batch of images to the specified format.
-///
-/// # Arguments
-///
-/// * `args` - Configuration for the conversion process
-///
-/// # Returns
-///
-/// Returns `Ok(())` on successful completion, or an error if:
-/// - Source path doesn't exist
-/// - Thread pool creation fails
-/// - All conversions fail
-///
-/// # Example
-///
-/// ```no_run
-/// use media_forge::image::{ImageArgs, run};
-///
-/// let args = ImageArgs { ... };
-/// run(args)?;
-/// ```
-pub fn run(args: ImageArgs) -> anyhow::Result<()> {
-```
-
-### Error Message Style
-
-```rust
-// Include context in error messages
-#[error("Failed to canonicalize path {0:?}: {1}")]
-CanonicalizationError(PathBuf, #[source] std::io::Error),
-
-// Use Debug formatting for paths
-#[error("Source path does not exist: {0:?}")]  // Shows full path with quotes
-SourceNotFound(PathBuf),
-
-// Provide actionable information
-#[error("FFmpeg not found. Install FFmpeg with NVENC support (av1_nvenc codec)")]
-FfmpegNotFound,
 ```
 
 ---
@@ -1060,17 +728,40 @@ media-forge vmaf original.mp4 encoded.mkv --duration 60
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success |
-| 1 | General error |
+| 0 | Success (all operations completed) |
+| 1 | Partial failure (some operations failed) |
 | 130 | Interrupted (Ctrl+C) |
 
 ### Environment Requirements
 
 - **Rust**: 2024 edition (nightly features: `let_chains`)
+- **System Libraries**: `libdav1d-dev` for AVIF support
 - **FFmpeg**: Required for video commands, must include:
   - NVENC support for encoding
   - libvmaf for quality analysis
 - **NVIDIA GPU**: For hardware-accelerated video encoding
+
+---
+
+## Changelog
+
+### 2026-01-10 (Post-Refactoring)
+- ✅ Added `src/constants.rs` - Extracted all magic numbers
+- ✅ Added `src/video/builder.rs` - FFmpeg command builder with fluent API
+- ✅ Added `tests/image_convert.rs` - Integration tests for image conversion
+- ✅ Added `tests/archive_create.rs` - Integration tests for archive creation
+- ✅ Fixed unsafe `.expect()` in `main.rs` - Now uses `try_set_handler()?`
+- ✅ Fixed mutex `.unwrap()` calls in `convert.rs` - Now uses safe patterns
+- ✅ Added `ConversionSummary` for error aggregation
+- ✅ Added 4 unit tests to `walker.rs`
+- ✅ Added 3 unit tests to `video/builder.rs`
+- ✅ Added 3 unit tests to `lib.rs` (CpuControl, PathUtil)
+- ✅ Added 2 unit tests to `video/mod.rs` (regex parsing)
+
+### Initial Analysis
+- Documented architecture, patterns, and refactoring targets
+- Identified 23 unsafe unwrap instances
+- Proposed testing strategy and code style guidelines
 
 ---
 
