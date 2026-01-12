@@ -73,6 +73,14 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
         num_threads,
     )?;
 
+    // Calculate storage stats
+    let original_size = PathUtil::get_dir_size(&source_path);
+    let final_size = PathUtil::get_dir_size(&dest_path);
+
+    let mut summary = summary;
+    summary.original_size = original_size;
+    summary.final_size = final_size;
+
     summary.print_summary();
 
     if args.report {
@@ -388,6 +396,8 @@ fn process_tasks(
         succeeded: 0,
         skipped: 0,
         failed: Vec::new(),
+        original_size: 0,
+        final_size: 0,
     };
 
     while let Ok((path, res)) = results_rx.try_recv() {

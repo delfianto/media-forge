@@ -1,4 +1,4 @@
-use crate::{CpuControl, IMAGE_EXTENSIONS, ui};
+use crate::{CpuControl, IMAGE_EXTENSIONS, PathUtil, ui};
 use indicatif::{MultiProgress, ProgressBar};
 use rayon::prelude::*;
 use std::fs;
@@ -82,16 +82,36 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Calculate original size before potential cleanup
+    let original_size: u64 = tasks
+        .par_iter()
+        .map(|t| PathUtil::get_dir_size(&t.src_dir))
+        .sum();
+
     if args.cleanup && !args.force && !prompt_for_cleanup_confirmation(&tasks)? {
         return Ok(());
     }
 
     let failed = execute_archive_tasks(tasks.clone(), Arc::new(args), num_threads)?;
 
+    // Calculate final size of successfull archives
+    let final_size: u64 = tasks
+        .par_iter()
+        .map(|t| {
+            if t.dest_cbz.exists() {
+                fs::metadata(&t.dest_cbz).map(|m| m.len()).unwrap_or(0)
+            } else {
+                0
+            }
+        })
+        .sum();
+
     let summary = ArchiveSummary {
         total: tasks.len(),
         succeeded: tasks.len() - failed.len(),
         failed,
+        original_size,
+        final_size,
     };
 
     summary.print_summary();

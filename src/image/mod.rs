@@ -36,6 +36,10 @@ pub struct ConversionSummary {
     pub skipped: usize,
     /// List of paths and their associated error messages for failed conversions.
     pub failed: Vec<(PathBuf, String)>,
+    /// Total size of source directory in bytes.
+    pub original_size: u64,
+    /// Total size of destination directory in bytes.
+    pub final_size: u64,
 }
 
 impl ConversionSummary {
@@ -53,6 +57,26 @@ impl ConversionSummary {
                 println!("    - {:?}: {}", path, error);
             }
         }
+
+        let saved = self.original_size.saturating_sub(self.final_size);
+        let saved_percent = if self.original_size > 0 {
+            (saved as f64 / self.original_size as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        println!("\nStorage Savings:");
+        println!(
+            "  Original Size: {}",
+            crate::format_size(self.original_size)
+        );
+        println!("  Final Size:    {}", crate::format_size(self.final_size));
+        println!(
+            "  Saved:         {} ({:.2}%)",
+            crate::format_size(saved),
+            saved_percent
+        );
+
         println!("{}\n", "=".repeat(50));
     }
 
@@ -70,6 +94,10 @@ pub struct ArchiveSummary {
     pub succeeded: usize,
     /// List of source directory paths and error messages for failed archivals.
     pub failed: Vec<(PathBuf, String)>,
+    /// Total size of source directories in bytes.
+    pub original_size: u64,
+    /// Total size of generated archives in bytes.
+    pub final_size: u64,
 }
 
 impl ArchiveSummary {
@@ -86,6 +114,26 @@ impl ArchiveSummary {
                 println!("    - {:?}: {}", path, error);
             }
         }
+
+        let saved = self.original_size.saturating_sub(self.final_size);
+        let saved_percent = if self.original_size > 0 {
+            (saved as f64 / self.original_size as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        println!("\nStorage Savings:");
+        println!(
+            "  Original Size: {}",
+            crate::format_size(self.original_size)
+        );
+        println!("  Final Size:    {}", crate::format_size(self.final_size));
+        println!(
+            "  Saved:         {} ({:.2}%)",
+            crate::format_size(saved),
+            saved_percent
+        );
+
         println!("{}\n", "=".repeat(50));
     }
 

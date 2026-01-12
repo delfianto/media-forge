@@ -96,6 +96,39 @@ impl PathUtil {
         }
         false
     }
+
+    /// Recursively calculates the size of a directory or file.
+    pub fn get_dir_size(path: &Path) -> u64 {
+        if path.is_file() {
+            return std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        }
+
+        use walkdir::WalkDir;
+        WalkDir::new(path)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.metadata().ok())
+            .filter(|metadata| metadata.is_file())
+            .map(|m| m.len())
+            .sum()
+    }
+}
+
+/// Formats a size in bytes to a human-readable string (e.g., "1.5 GB").
+pub fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 /// CPU thread count management utilities.
