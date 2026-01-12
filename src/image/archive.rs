@@ -255,19 +255,31 @@ fn execute_archive_tasks(
     );
 
     let mp = MultiProgress::new();
+    let mut spinners = Vec::new();
+    for _ in 0..num_threads.min(crate::constants::MAX_ANALYSIS_SPINNERS) {
+        let pb = mp.add(ProgressBar::new_spinner());
+        pb.set_style(ui::generic_spinner_style());
+        pb.set_message("Idle");
+        spinners.push(pb);
+    }
+    let spinner_pool = Arc::new(Mutex::new(spinners));
+
     let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
     pb_main.set_style(ui::main_bar_style());
-
     let pb_main = Arc::new(pb_main);
+
     let failures: Arc<Mutex<Vec<(PathBuf, String)>>> = Arc::new(Mutex::new(Vec::new()));
 
     tasks.par_iter().for_each(|task| {
-        let pb_inner = mp.add(ProgressBar::new_spinner());
-        pb_inner.set_style(ui::generic_spinner_style());
-        pb_inner.set_message(format!(
-            "{:?}",
-            task.src_dir.file_name().unwrap_or_default()
-        ));
+        let pb_opt = spinner_pool.lock().ok().and_then(|mut pool| pool.pop());
+
+        if let Some(ref pb) = pb_opt {
+            pb.set_message(format!(
+                "{:?}",
+                task.src_dir.file_name().unwrap_or_default()
+            ));
+            pb.enable_steady_tick(ui::SPINNER_TICK);
+        }
 
         if let Err(e) = create_cbz(task, &args) {
             eprintln!("Error archiving {:?}: {}", task.src_dir, e);
@@ -276,9 +288,27 @@ fn execute_archive_tasks(
             }
         }
 
-        mp.remove(&pb_inner);
+        if let Some(ref pb) = pb_opt {
+            pb.disable_steady_tick();
+            pb.set_message("Idle");
+        }
+
+        if let Some(pb) = pb_opt
+            && let Ok(mut pool) = spinner_pool.lock()
+        {
+            pool.push(pb);
+        }
+
         pb_main.inc(1);
     });
+
+    {
+        if let Ok(pool) = spinner_pool.lock() {
+            for pb in pool.iter() {
+                pb.finish_and_clear();
+            }
+        }
+    }
 
     pb_main.finish_with_message("Done!");
 
