@@ -166,6 +166,16 @@ fn collect_video_tasks(
 /// Orchestrates the parallel execution of video encoding tasks.
 fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<Vec<(PathBuf, String)>> {
     let mp = MultiProgress::new();
+
+    let mut spinners = Vec::new();
+    for _ in 0..args.jobs.min(crate::constants::MAX_ANALYSIS_SPINNERS) {
+        let pb = mp.add(ProgressBar::new(0));
+        pb.set_style(ui::file_progress_style());
+        pb.set_message("Idle");
+        spinners.push(pb);
+    }
+    let spinner_pool = Arc::new(Mutex::new(spinners));
+
     let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
     pb_main.set_style(ui::main_bar_style());
     pb_main.set_message("Total Video Progress");
@@ -182,30 +192,54 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<Vec<(Pa
 
     pool.install(|| {
         tasks.par_iter().for_each(|task| {
-            let pb_file = mp.add(ProgressBar::new(task.duration as u64));
-            pb_file.set_style(ui::file_progress_style());
+            let pb_opt = spinner_pool.lock().ok().and_then(|mut pool| pool.pop());
 
-            let name = task
-                .src
-                .file_name()
-                .map(|n: &std::ffi::OsStr| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-            let name_display = Naming::truncate_from_start(&name, 50);
+            // Prepare the progress bat to use (either a visible recycled one, or a hidden dummy)
+            let pb_to_use = if let Some(ref pb) = pb_opt {
+                pb.set_length(task.duration as u64);
+                pb.set_position(0);
 
-            pb_file.set_message(name_display);
+                let name = task
+                    .src
+                    .file_name()
+                    .map(|n: &std::ffi::OsStr| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let name_display = Naming::truncate_from_start(&name, 50);
 
-            if let Err(e) = convert_video(task, &args, &pb_file) {
+                pb.set_message(name_display);
+                pb.clone()
+            } else {
+                ProgressBar::hidden()
+            };
+
+            if let Err(e) = convert_video(task, &args, &pb_to_use) {
                 mp.suspend(|| eprintln!("Error converting {:?}: {}", task.src, e));
                 if let Ok(mut f) = failures.lock() {
                     f.push((task.src.clone(), e.to_string()));
                 }
             }
 
-            pb_file.finish_and_clear();
-            mp.remove(&pb_file);
+            // Cleanup and return to pool if it was a visible spinner
+            if let Some(pb) = pb_opt {
+                pb.set_message("Idle");
+                pb.set_length(0);
+                pb.set_position(0);
+
+                if let Ok(mut pool) = spinner_pool.lock() {
+                    pool.push(pb);
+                }
+            }
+
             pb_main.inc(1);
         });
     });
+
+    // Cleanup all spinners in the pool
+    if let Ok(pool) = spinner_pool.lock() {
+        for pb in pool.iter() {
+            pb.finish_and_clear();
+        }
+    }
 
     pb_main.finish_with_message("Done!");
     println!("Total time: {:.2?}", start_time.elapsed());

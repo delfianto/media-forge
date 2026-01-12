@@ -133,7 +133,6 @@ fn collect_tasks(
             .map_err(|_| ImageError::Io(std::io::Error::other("Lock poisoned")))?;
         for pb in pool.iter() {
             pb.finish_and_clear();
-            mp.remove(pb);
         }
     }
 
@@ -317,18 +316,18 @@ fn process_tasks(
     num_threads: usize,
 ) -> Result<ConversionSummary> {
     let mp = MultiProgress::new();
-    let pb_main = mp.add(ProgressBar::new(total_files as u64));
-    pb_main.set_style(ui::main_bar_style());
-    pb_main.set_message("Total Progress");
-
     let mut spinners = Vec::new();
-    for _ in 0..num_threads {
+    for _ in 0..num_threads.min(MAX_ANALYSIS_SPINNERS) {
         let pb = mp.add(ProgressBar::new_spinner());
         pb.set_style(ui::generic_spinner_style());
         pb.set_message("Idle");
         spinners.push(pb);
     }
     let spinner_pool = Arc::new(Mutex::new(spinners));
+
+    let pb_main = mp.add(ProgressBar::new(total_files as u64));
+    pb_main.set_style(ui::main_bar_style());
+    pb_main.set_message("Total Progress");
 
     let start_instant = Instant::now();
     let args_arc = Arc::new(args.clone());
@@ -338,7 +337,14 @@ fn process_tasks(
     let (results_tx, results_rx) = unbounded::<(PathBuf, Result<()>)>();
 
     std::thread::scope(|s| {
-        spawn_workers(s, rx, args_arc, spinner_pool.clone(), num_threads);
+        spawn_workers(
+            s,
+            rx,
+            args_arc,
+            spinner_pool.clone(),
+            mp.clone(),
+            num_threads,
+        );
         run_producer(
             tasks_by_container,
             container_names,
@@ -352,8 +358,10 @@ fn process_tasks(
     {
         if let Ok(pool) = spinner_pool.lock() {
             for pb in pool.iter() {
+                // Ensure tick is disabled and message is empty before clearing
+                pb.disable_steady_tick();
+                pb.set_message("");
                 pb.finish_and_clear();
-                mp.remove(pb);
             }
         }
     }
@@ -385,12 +393,14 @@ fn spawn_workers<'a>(
     rx: Receiver<WorkItem>,
     args: Arc<ImageArgs>,
     spinner_pool: Arc<Mutex<Vec<ProgressBar>>>,
+    mp: MultiProgress,
     num_threads: usize,
 ) {
     for _ in 0..num_threads {
         let rx = rx.clone();
         let args = args.clone();
         let spinner_pool = spinner_pool.clone();
+        let mp = mp.clone();
 
         scope.spawn(move || {
             while let Ok(item) = rx.recv() {
@@ -398,7 +408,7 @@ fn spawn_workers<'a>(
                     return;
                 }
 
-                process_work_item(item, &args, &spinner_pool);
+                process_work_item(item, &args, &spinner_pool, &mp);
             }
         });
     }
@@ -409,6 +419,7 @@ fn process_work_item(
     item: WorkItem,
     args: &ImageArgs,
     spinner_pool: &Arc<Mutex<Vec<ProgressBar>>>,
+    mp: &MultiProgress,
 ) {
     let name = match &item.task.task_type {
         TaskType::File | TaskType::Copy => item
@@ -431,7 +442,9 @@ fn process_work_item(
 
     let result = process_single_task(&item, args);
     if let Err(ref e) = result {
-        eprintln!("Error processing {}: {}", name_display, e);
+        mp.suspend(|| {
+            eprintln!("Error processing {}: {}", name_display, e);
+        });
     }
 
     if let Some(spinner) = pb_opt
@@ -457,10 +470,15 @@ fn run_producer(
     pb_main: &Arc<ProgressBar>,
     results_tx: Sender<(PathBuf, Result<()>)>,
 ) {
+    // Create a single persistent container bar
+    let pb_container = mp.add(ProgressBar::new(0));
+    pb_container.set_style(ui::sub_bar_style());
+
     for container_name in container_names {
         if let Some(tasks) = tasks_by_container.get(&container_name) {
-            let pb_container = mp.add(ProgressBar::new(tasks.len() as u64));
-            pb_container.set_style(ui::sub_bar_style());
+            // Reset and update the existing bar
+            pb_container.reset();
+            pb_container.set_length(tasks.len() as u64);
             pb_container.set_message(container_name.clone());
 
             let (done_tx, done_rx) = unbounded::<Result<()>>();
@@ -491,11 +509,9 @@ fn run_producer(
                     break;
                 }
             }
-
-            pb_container.finish_and_clear();
-            mp.remove(&pb_container);
         }
     }
+    pb_container.finish_and_clear();
     drop(tx);
 }
 
