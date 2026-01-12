@@ -48,17 +48,37 @@ pub fn run(args: VideoArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Calculate original size
+    let original_size: u64 = tasks
+        .par_iter()
+        .map(|t| fs::metadata(&t.src).map(|m| m.len()).unwrap_or(0))
+        .sum();
+
     let failed = if !tasks.is_empty() {
         process_video_tasks(tasks.clone(), args)?
     } else {
         Vec::new()
     };
 
+    // Calculate final size
+    let final_size: u64 = tasks
+        .par_iter()
+        .map(|t| {
+            if t.dest.exists() {
+                fs::metadata(&t.dest).map(|m| m.len()).unwrap_or(0)
+            } else {
+                0
+            }
+        })
+        .sum();
+
     let summary = VideoSummary {
         total: tasks.len() + skipped,
         succeeded: tasks.len() - failed.len(),
         skipped,
         failed,
+        original_size,
+        final_size,
     };
 
     summary.print_summary();
