@@ -316,6 +316,17 @@ fn process_tasks(
     num_threads: usize,
 ) -> Result<ConversionSummary> {
     let mp = MultiProgress::new();
+
+    // 1. Main Progress Bar (Top)
+    let pb_main = mp.add(ProgressBar::new(total_files as u64));
+    pb_main.set_style(ui::main_bar_style());
+    pb_main.set_message("Total Progress");
+
+    // 2. Container Progress Bar (Middle)
+    let pb_container = mp.add(ProgressBar::new(0));
+    pb_container.set_style(ui::sub_bar_style());
+
+    // 3. Worker Spinners (Bottom)
     let mut spinners = Vec::new();
     for _ in 0..num_threads.min(MAX_ANALYSIS_SPINNERS) {
         let pb = mp.add(ProgressBar::new_spinner());
@@ -325,13 +336,13 @@ fn process_tasks(
     }
     let spinner_pool = Arc::new(Mutex::new(spinners));
 
-    let pb_main = mp.add(ProgressBar::new(total_files as u64));
-    pb_main.set_style(ui::main_bar_style());
-    pb_main.set_message("Total Progress");
-
     let start_instant = Instant::now();
     let args_arc = Arc::new(args.clone());
     let pb_main = Arc::new(pb_main);
+    // pb_container does not need Arc as it is passed by reference to run_producer (which runs in scoped thread)?
+    // Wait, run_producer is called in the scope.
+    // pb_container needs to be cloned into WorkItem?
+    // WorkItem has pb_container: ProgressBar (which is cheap to clone, it's an Arc internally).
 
     let (tx, rx) = bounded::<WorkItem>(num_threads * CHANNEL_BUFFER_MULTIPLIER);
     let (results_tx, results_rx) = unbounded::<(PathBuf, Result<()>)>();
@@ -349,7 +360,7 @@ fn process_tasks(
             tasks_by_container,
             container_names,
             tx,
-            &mp,
+            &pb_container, // Pass the bar we created
             &pb_main,
             results_tx,
         );
@@ -358,13 +369,15 @@ fn process_tasks(
     {
         if let Ok(pool) = spinner_pool.lock() {
             for pb in pool.iter() {
-                // Ensure tick is disabled and message is empty before clearing
                 pb.disable_steady_tick();
                 pb.set_message("");
                 pb.finish_and_clear();
             }
         }
     }
+
+    // Clear container bar too
+    pb_container.finish_and_clear();
 
     pb_main.finish_with_message("Done!");
     let duration = start_instant.elapsed();
@@ -466,13 +479,11 @@ fn run_producer(
     tasks_by_container: HashMap<String, Vec<Task>>,
     container_names: Vec<String>,
     tx: Sender<WorkItem>,
-    mp: &MultiProgress,
+    pb_container: &ProgressBar, // Changed from mp: &MultiProgress
     pb_main: &Arc<ProgressBar>,
     results_tx: Sender<(PathBuf, Result<()>)>,
 ) {
-    // Create a single persistent container bar
-    let pb_container = mp.add(ProgressBar::new(0));
-    pb_container.set_style(ui::sub_bar_style());
+    // We reuse the passed pb_container
 
     for container_name in container_names {
         if let Some(tasks) = tasks_by_container.get(&container_name) {
@@ -511,7 +522,6 @@ fn run_producer(
             }
         }
     }
-    pb_container.finish_and_clear();
     drop(tx);
 }
 

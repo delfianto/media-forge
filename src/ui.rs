@@ -32,7 +32,7 @@ pub fn analyzing_style() -> ProgressStyle {
 /// Returns the standard style for main task progress bars.
 pub fn main_bar_style() -> ProgressStyle {
     ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan}] {pos}/{len} ({eta}) {msg}")
+        .template("[{elapsed_precise}] [{bar:40.cyan}] {pos}/{len} ({eta}) {msg}")
         .expect("Invalid template")
         .progress_chars(PROGRESS_CHARS)
 }
@@ -40,7 +40,7 @@ pub fn main_bar_style() -> ProgressStyle {
 /// Returns the standard style for sub-task or container-level progress bars.
 pub fn sub_bar_style() -> ProgressStyle {
     ProgressStyle::default_bar()
-        .template("  [{bar:30.yellow}] {pos}/{len} {msg}")
+        .template("[{elapsed_precise}] [{bar:40.yellow}] {pos}/{len} {msg}")
         .expect("Invalid template")
         .progress_chars(PROGRESS_CHARS)
 }

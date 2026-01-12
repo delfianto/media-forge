@@ -167,6 +167,10 @@ fn collect_video_tasks(
 fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<Vec<(PathBuf, String)>> {
     let mp = MultiProgress::new();
 
+    let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
+    pb_main.set_style(ui::main_bar_style());
+    pb_main.set_message("Total Video Progress");
+
     let mut spinners = Vec::new();
     for _ in 0..args.jobs.min(crate::constants::MAX_ANALYSIS_SPINNERS) {
         let pb = mp.add(ProgressBar::new(0));
@@ -175,10 +179,6 @@ fn process_video_tasks(tasks: Vec<VideoTask>, args: VideoArgs) -> Result<Vec<(Pa
         spinners.push(pb);
     }
     let spinner_pool = Arc::new(Mutex::new(spinners));
-
-    let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
-    pb_main.set_style(ui::main_bar_style());
-    pb_main.set_message("Total Video Progress");
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(args.jobs)

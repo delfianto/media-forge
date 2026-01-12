@@ -255,6 +255,13 @@ fn execute_archive_tasks(
     );
 
     let mp = MultiProgress::new();
+
+    // 1. Main Progress Bar (Top)
+    let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
+    pb_main.set_style(ui::main_bar_style());
+    let pb_main = Arc::new(pb_main);
+
+    // 2. Worker Spinners (Bottom)
     let mut spinners = Vec::new();
     for _ in 0..num_threads.min(crate::constants::MAX_ANALYSIS_SPINNERS) {
         let pb = mp.add(ProgressBar::new_spinner());
@@ -263,10 +270,6 @@ fn execute_archive_tasks(
         spinners.push(pb);
     }
     let spinner_pool = Arc::new(Mutex::new(spinners));
-
-    let pb_main = mp.add(ProgressBar::new(tasks.len() as u64));
-    pb_main.set_style(ui::main_bar_style());
-    let pb_main = Arc::new(pb_main);
 
     let failures: Arc<Mutex<Vec<(PathBuf, String)>>> = Arc::new(Mutex::new(Vec::new()));
 
