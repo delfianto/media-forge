@@ -180,15 +180,15 @@ media-forge archive --cleanup --force
 
 **Options:**
 
-| Option        | Short | Default        | Description                                                        |
-| ------------- | ----- | -------------- | ------------------------------------------------------------------ |
-| `destination` | -     | Same as source | Output directory for CBZ files                                     |
-| `--source`    | `-s`  | `.`            | Source directory containing image folders                          |
-| `--recursive` | -     | false          | Scan subdirectories for image folders                              |
-| `--cleanup`   | -     | false          | Delete source folders after archiving (requires confirmation)      |
-| `--dry-run`   | `-n`  | false          | Show what would be done without executing                          |
-| `--force`     | -     | false          | Skip confirmation prompt for --cleanup (automation only)           |
-| `--jobs`      | `-j`  | 75% cores      | Number of parallel threads                                         |
+| Option        | Short | Default        | Description                                                   |
+| ------------- | ----- | -------------- | ------------------------------------------------------------- |
+| `destination` | -     | Same as source | Output directory for CBZ files                                |
+| `--source`    | `-s`  | `.`            | Source directory containing image folders                     |
+| `--recursive` | -     | false          | Scan subdirectories for image folders                         |
+| `--cleanup`   | -     | false          | Delete source folders after archiving (requires confirmation) |
+| `--dry-run`   | `-n`  | false          | Show what would be done without executing                     |
+| `--force`     | -     | false          | Skip confirmation prompt for --cleanup (automation only)      |
+| `--jobs`      | `-j`  | 75% cores      | Number of parallel threads                                    |
 
 **Archive Structure:**
 
@@ -227,6 +227,7 @@ media-forge archive --cleanup
 ### AVIF Parameters (Image Encoding)
 
 While AVIF offers incredible lossy compression, it is still limited by the information contained in the original source data. The final outcome depends heavily on the source:
+
 - **Lossless Sources**: You can expect truly amazing compression results.
 - **High-Quality/High-Res JPEGs**: Even with compressed sources, converting very high-resolution JPEGs can achieve **60% to 70% size reduction** without perceivable quality loss.
 
