@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Service
+MimeType=inode/directory;
+Actions=convertImagesAvif;convertVideosAv1;createArchive;
+X-KDE-Submenu=Media Forge
+
+[Desktop Action convertImagesAvif]
+Name=Convert Images to AVIF
+Icon=image-x-generic
+Exec=kitty --class="kitty:mediaforge" --hold media-forge image %f/converted_images -s %f
+
+[Desktop Action convertVideosAv1]
+Name=Convert Videos to AV1
+Icon=video-x-generic
+Exec=kitty --class="kitty:mediaforge" --hold media-forge video %f/converted_videos -s %f
+
+[Desktop Action createArchive]
+Name=Create CBZ Archive
+Icon=package-x-generic
+Exec=kitty --class="kitty:mediaforge" --hold media-forge archive -s %F --jobs 2
