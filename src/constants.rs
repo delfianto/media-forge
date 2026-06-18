@@ -22,7 +22,7 @@ pub const VMAF_ERROR_LOG: &str = "media-forge-vmaf-error.log";
 pub const SPINNER_TICK_MS: u64 = 100;
 
 /// Default quality for image conversion
-pub const DEFAULT_IMAGE_QUALITY: u8 = 72;
+pub const DEFAULT_IMAGE_QUALITY: u8 = 80;
 
 /// Default speed for AVIF encoding
 pub const DEFAULT_AVIF_SPEED: u8 = 4;
