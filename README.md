@@ -99,7 +99,7 @@ media-forge image ./output --depth 5
 | `destination` | -     | Required  | Output directory for converted images                                          |
 | `--source`    | `-s`  | `.`       | Source directory to scan for images                                            |
 | `--format`    | `-f`  | `avif`    | Output format: `avif` or `webp`                                                |
-| `--quality`   | `-q`  | `72`      | Quality (0-100, higher = better). Default balances quality & file size.        |
+| `--quality`   | `-q`  | `80`      | Quality (0-100, higher = better). Default balances quality & file size.        |
 | `--speed`     | -     | `4`       | AVIF encoding speed (0-10). Lower = slower but smaller files. See guide below. |
 | `--depth`     | -     | `2`       | Directory recursion depth                                                      |
 | `--jobs`      | `-j`  | 75% cores | Number of parallel threads                                                     |
@@ -231,16 +231,16 @@ While AVIF offers incredible lossy compression, it is still limited by the infor
 - **Lossless Sources**: You can expect truly amazing compression results.
 - **High-Quality/High-Res JPEGs**: Even with compressed sources, converting very high-resolution JPEGs can achieve **60% to 70% size reduction** without perceivable quality loss.
 
-#### Quality (`--quality`, default: 72)
+#### Quality (`--quality`, default: 80)
 
 The quality parameter (0-100) controls the visual fidelity vs file size tradeoff:
 
 - **Scale**: 0 (lowest quality) to 100 (highest quality)
-- **Default (72)**: Chosen as the optimal balance point where:
-    - Visual quality is perceptually close to lossless for most content
-    - File sizes remain reasonable (typically 40-60% smaller than equivalent JPEG)
-    - Roughly equivalent to JPEG quality 85-90 due to AVIF's superior compression algorithm
-    - Quality loss is imperceptible to most viewers on most displays
+- **Default (80)**: Chosen as the optimal balance point where:
+    - Visual quality is perceptually close to lossless, especially for high-resolution source material
+    - File sizes remain reasonable (typically 30-50% smaller than equivalent JPEG)
+    - Roughly equivalent to JPEG quality 90-93 due to AVIF's superior compression algorithm
+    - Preserves fine detail in high-res photography (skin texture, hair, fabric)
 
 **Guidelines:**
 
