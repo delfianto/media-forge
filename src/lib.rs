@@ -21,14 +21,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Global flag to signal shutdown (e.g., on Ctrl+C).
 pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
-/// Supported image extensions for conversion.
-pub const IMAGE_EXTENSIONS: &[&str] = &["avif", "webp", "jpg", "jpeg", "png", "tiff", "bmp"];
+/// Supported image extensions for conversion (excludes already-optimal formats).
+pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tiff", "bmp"];
 
 /// Supported archive extensions for image extraction.
 pub const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cbz"];
 
 /// Supported video extensions for hardware-accelerated encoding.
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v", "mpv", "webm"];
+
+/// Image extensions that are passed through without conversion.
+/// Includes already-optimal modern formats (avif, webp) and animated formats (gif, apng)
+/// that the image pipeline cannot re-encode meaningfully.
+pub const PASSTHROUGH_IMAGE_EXTENSIONS: &[&str] = &[
+    "avif", // already an optimal format — re-encoding would only degrade quality
+    "webp", // already an optimal format — re-encoding would only degrade quality
+    "gif",  // animated — cannot be converted to static avif/webp without losing animation
+    "apng", // animated PNG — cannot be converted to static avif/webp without losing animation
+];
 
 /// Registry for active child process PIDs to ensure cleanup on termination.
 static ACTIVE_PROCESSES: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
