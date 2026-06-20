@@ -34,30 +34,67 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
 
     println!("Running with {} threads", num_threads);
 
-    let (source_path, dest_path) = PathUtil::resolve_paths(&args.source, &args.destination)
-        .map_err(|_| ImageError::SourceNotFound(args.source.clone()))?;
-
     let mut extensions = Vec::new();
     extensions.extend_from_slice(IMAGE_EXTENSIONS);
     extensions.extend_from_slice(VIDEO_EXTENSIONS);
     extensions.extend_from_slice(PASSTHROUGH_IMAGE_EXTENSIONS);
 
     let walker = Walker::new(&extensions, args.depth, true);
-    let assets = if source_path.is_file() {
-        walker.scan_flat(&source_path)
+
+    let dest_path = if args.destination.is_absolute() {
+        args.destination.clone()
     } else {
-        println!("Scanning {}...", source_path.display());
-        walker.scan_with_progress(&source_path, "Scanning...")
+        std::env::current_dir()
+            .map_err(|_| ImageError::NoCurrentDir)?
+            .join(&args.destination)
     };
 
-    let (tasks_by_container, total_files) =
-        collect_tasks(assets, &source_path, &dest_path, &args.format, num_threads)?;
-    if tasks_by_container.is_empty() {
+    let multi_source = args.source.len() > 1;
+
+    // Resolve each source to (canonical_source, effective_dest).
+    // With multiple directory sources, namespace each under dest/source_name so
+    // folder1 → out/folder1 and folder2 → out/folder2 instead of both dumping into out/.
+    let mut resolved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for source in &args.source {
+        let source_path = std::fs::canonicalize(source)
+            .map_err(|_| ImageError::SourceNotFound(source.clone()))?;
+        let effective_dest = if multi_source && source_path.is_dir() {
+            let dir_name = source_path.file_name().unwrap_or_default();
+            dest_path.join(dir_name)
+        } else {
+            dest_path.clone()
+        };
+        resolved.push((source_path, effective_dest));
+    }
+
+    let mut all_tasks_by_container: HashMap<String, Vec<Task>> = HashMap::new();
+    let mut total_files = 0usize;
+    let mut original_size = 0u64;
+
+    for (source_path, effective_dest) in &resolved {
+        let assets = if source_path.is_file() {
+            walker.scan_flat(source_path)
+        } else {
+            println!("Scanning {}...", source_path.display());
+            walker.scan_with_progress(source_path, "Scanning...")
+        };
+
+        let (tasks, files) =
+            collect_tasks(assets, source_path, effective_dest, &args.format, num_threads)?;
+
+        for (k, v) in tasks {
+            all_tasks_by_container.entry(k).or_default().extend(v);
+        }
+        total_files += files;
+        original_size += PathUtil::get_dir_size(source_path);
+    }
+
+    if all_tasks_by_container.is_empty() {
         println!("No files found to process.");
         return Ok(());
     }
 
-    let mut container_names: Vec<String> = tasks_by_container.keys().cloned().collect();
+    let mut container_names: Vec<String> = all_tasks_by_container.keys().cloned().collect();
     container_names.sort();
 
     println!(
@@ -67,15 +104,13 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     );
 
     let summary = process_tasks(
-        tasks_by_container,
+        all_tasks_by_container,
         container_names,
         total_files,
         &args,
         num_threads,
     )?;
 
-    // Calculate storage stats
-    let original_size = PathUtil::get_dir_size(&source_path);
     let final_size = PathUtil::get_dir_size(&dest_path);
 
     let mut summary = summary;
@@ -85,7 +120,13 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
     summary.print_summary();
 
     if args.report {
-        crate::image::report::generate_conversion_report(&source_path, &dest_path, &args.format)?;
+        for (source_path, effective_dest) in &resolved {
+            crate::image::report::generate_conversion_report(
+                source_path,
+                effective_dest,
+                &args.format,
+            )?;
+        }
     }
 
     if summary.exit_code() != 0 {
