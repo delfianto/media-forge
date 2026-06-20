@@ -14,7 +14,7 @@ fn test_image_conversion_integration() {
 
     let args = ImageArgs {
         destination: dest_dir.path().to_path_buf(),
-        source: source_dir.path().to_path_buf(),
+        source: vec![source_dir.path().to_path_buf()],
         format: "avif".to_string(),
         quality: 50,
         speed: 8,
@@ -47,7 +47,7 @@ fn test_image_conversion_preserve_mtime() {
 
     let args = ImageArgs {
         destination: dest_dir.path().to_path_buf(),
-        source: source_dir.path().to_path_buf(),
+        source: vec![source_dir.path().to_path_buf()],
         format: "webp".to_string(),
         quality: 50,
         speed: 8,

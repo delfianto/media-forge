@@ -20,7 +20,7 @@ fn test_archive_creation_integration() {
 
     let args = ArchiveArgs {
         destination: Some(dest_dir.path().to_path_buf()),
-        source: source_root.path().to_path_buf(),
+        source: vec![source_root.path().to_path_buf()],
         jobs: Some(1),
         recursive: true,
         cleanup: false,

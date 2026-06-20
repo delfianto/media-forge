@@ -217,9 +217,9 @@ pub struct ImageArgs {
     #[arg(value_name = "DEST")]
     pub destination: PathBuf,
 
-    /// Source directory containing images to convert
-    #[arg(short, long, default_value = ".", value_name = "DIR")]
-    pub source: PathBuf,
+    /// Source directories or image files to convert
+    #[arg(short, long, default_value = ".", value_name = "DIR", num_args = 1..)]
+    pub source: Vec<PathBuf>,
 
     /// Output image format
     #[arg(short, long, default_value = "avif", value_parser = ["avif", "webp"], value_name = "FMT")]
