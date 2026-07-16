@@ -8,6 +8,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: sudo apt-get update && sudo apt-get install -y nasm
+      - name: System build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm clang pkg-config libdav1d-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev \
+            libavdevice-dev libswscale-dev libswresample-dev
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --verbose
