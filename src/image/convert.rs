@@ -1,7 +1,10 @@
 use crate::constants::{CHANNEL_BUFFER_MULTIPLIER, MAX_ANALYSIS_SPINNERS};
 use crate::image::{ConversionSummary, ImageArgs, ImageError, Result, Task, TaskType};
 use crate::walker::{Asset, MediaSource, Walker};
-use crate::{CpuControl, IMAGE_EXTENSIONS, Naming, PASSTHROUGH_IMAGE_EXTENSIONS, PathUtil, SHUTDOWN, VIDEO_EXTENSIONS, ui};
+use crate::{
+    CpuControl, IMAGE_EXTENSIONS, Naming, PASSTHROUGH_IMAGE_EXTENSIONS, PathUtil, SHUTDOWN,
+    VIDEO_EXTENSIONS, ui,
+};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use indicatif::{MultiProgress, ProgressBar};
@@ -79,8 +82,13 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
             walker.scan_with_progress(source_path, "Scanning...")
         };
 
-        let (tasks, files) =
-            collect_tasks(assets, source_path, effective_dest, &args.format, num_threads)?;
+        let (tasks, files) = collect_tasks(
+            assets,
+            source_path,
+            effective_dest,
+            &args.format,
+            num_threads,
+        )?;
 
         for (k, v) in tasks {
             all_tasks_by_container.entry(k).or_default().extend(v);

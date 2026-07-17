@@ -27,7 +27,7 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
 
     let mut tasks = Vec::new();
     let mut items_found = 0;
-    
+
     println!("Scanning {} source(s)...", args.source.len());
     let pb_scan = ui::create_scanner("Scanning...");
 
@@ -56,17 +56,17 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
 
         let found_tasks = if source_path.is_file() || (!args.recursive && source_path.is_dir()) {
             let mut t = Vec::new();
-             find_image_folders(
+            find_image_folders(
                 &source_path,
                 &source_path,
                 &dest_path,
-                false, 
+                false,
                 &mut t,
-                &mut |_| {}, 
+                &mut |_| {},
             )?;
             t
         } else {
-             collect_archive_tasks(&source_path, &dest_path, args.recursive, |path| {
+            collect_archive_tasks(&source_path, &dest_path, args.recursive, |path| {
                 items_found += 1;
                 pb_scan.set_position(items_found);
                 let name = path
@@ -76,10 +76,10 @@ pub fn run(args: ArchiveArgs) -> anyhow::Result<()> {
                 pb_scan.set_message(format!("Scanning: {}", name));
             })?
         };
-        
+
         tasks.extend(found_tasks);
     }
-    
+
     pb_scan.finish_and_clear();
 
     if tasks.is_empty() {
