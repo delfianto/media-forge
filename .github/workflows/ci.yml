@@ -1,3 +1,6 @@
+# CI for justfile-rust baseline. Source of truth: delfianto/ci-rust + JUST.md
+# Gates: format --check-only · lint · cargo build --all-targets · test
+
 name: ci
 
 on:
@@ -24,6 +27,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Optional system deps live here in ci-rust; media-forge needs them always.
       - name: System build dependencies
         run: |
           sudo apt-get update
@@ -31,8 +35,14 @@ jobs:
             libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev \
             libavdevice-dev libswscale-dev libswresample-dev
 
-      - name: fmt
-        run: just fmt-check
+      # Optional — only for crates that need native libs at build time:
+      # - name: System build dependencies
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y <packages>
+
+      - name: format
+        run: just format --check-only
 
       - name: lint
         run: just lint
@@ -42,4 +52,3 @@ jobs:
 
       - name: test
         run: just test
-
