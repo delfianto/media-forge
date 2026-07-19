@@ -39,6 +39,6 @@ tempfile = "3.27"
 
 [profile.release]
 codegen-units = 1
-lto = "fat"
+lto = "thin"
 panic = "abort"
 strip = true
