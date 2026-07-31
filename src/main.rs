@@ -1,13 +1,12 @@
 //! Entry point for the media-forge CLI tool.
 //!
-//! Media-Forge provides high-performance batch media conversion capabilities,
-//! utilizing multi-threading for image processing and NVIDIA hardware acceleration
-//! for video encoding.
+//! Media-Forge provides high-performance image conversion and archive creation.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use media_forge::{ProcessManager, image, video};
+use media_forge::{SHUTDOWN, image};
 use mimalloc::MiMalloc;
+use std::sync::atomic::Ordering;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -19,7 +18,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 #[command(author = "Media-Forge Contributors")]
 #[command(about = "High-performance batch media conversion tool")]
 #[command(
-    long_about = "Media-Forge is a CLI tool for batch media conversion on Linux.\n\n    Features:\n  \n  - Convert images to AVIF/WebP with configurable quality\n  \n  - Encode videos to AV1 using NVIDIA CUDA acceleration\n  \n  - Create CBZ comic book archives from image folders\n\n    Use 'media-forge <command> --help' for detailed command information."
+    long_about = "Media-Forge is a CLI tool for image conversion and archive creation on Linux.\n\n    Features:\n  \n  - Convert images to AVIF/WebP with configurable quality\n  \n  - Compare image quality with SSIMULACRA2\n  \n  - Create CBZ comic book archives from image folders\n\n    Use 'media-forge <command> --help' for detailed command information."
 )]
 #[command(propagate_version = true)]
 struct Cli {
@@ -53,29 +52,13 @@ enum Commands {
     /// Provides a score from 0-100 with a quality rating.
     #[command(name = "simulacra", visible_alias = "qimg")]
     ImageQuality(image::QualityArgs),
-
-    /// Encode videos to AV1 using NVIDIA hardware acceleration
-    ///
-    /// Uses FFmpeg with NVIDIA NVENC for hardware-accelerated AV1 encoding.
-    /// Requires an NVIDIA GPU with NVENC support (GTX 10-series or newer).
-    /// Automatically skips videos already encoded in AV1.
-    #[command(name = "video", visible_alias = "vid")]
-    Video(video::VideoArgs),
-
-    /// Compare video quality using VMAF
-    ///
-    /// Analyzes the quality of an encoded video compared to its original source.
-    /// Provides mean, min, and max VMAF scores with a quality rating.
-    /// Requires FFmpeg with libvmaf support.
-    #[command(name = "vmaf", visible_alias = "qvid")]
-    Quality(video::QualityArgs),
 }
 
 /// Parses command-line arguments and routes execution to the appropriate subcommand.
 fn main() -> Result<()> {
     ctrlc::try_set_handler(move || {
-        eprintln!("\n\x1b[31m[Interrupt] Shutting down and cleaning up child processes...\x1b[0m");
-        ProcessManager::kill_all();
+        eprintln!("\n\x1b[31m[Interrupt] Shutting down...\x1b[0m");
+        SHUTDOWN.store(true, Ordering::SeqCst);
         std::process::exit(130);
     })?;
 
@@ -85,7 +68,5 @@ fn main() -> Result<()> {
         Commands::Image(args) => image::run(args),
         Commands::Archive(args) => image::run_archive(args),
         Commands::ImageQuality(args) => image::run_quality(args),
-        Commands::Video(args) => video::run(args),
-        Commands::Quality(args) => video::run_quality(args),
     }
 }
