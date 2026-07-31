@@ -8,15 +8,11 @@
 pub mod constants;
 pub mod image;
 pub mod ui;
-pub mod video;
 pub mod walker;
 
 use crate::constants::{DEFAULT_CPU_RATIO, MAX_CPU_RATIO};
-use once_cell::sync::Lazy;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 /// Global flag to signal shutdown (e.g., on Ctrl+C).
 pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -27,9 +23,6 @@ pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tiff", "bmp"];
 /// Supported archive extensions for image extraction.
 pub const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cbz"];
 
-/// Supported video extensions for hardware-accelerated encoding.
-pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "ts", "m4v", "mpv", "webm"];
-
 /// Image extensions that are passed through without conversion.
 /// Includes already-optimal modern formats (avif, webp) and animated formats (gif, apng)
 /// that the image pipeline cannot re-encode meaningfully.
@@ -39,42 +32,6 @@ pub const PASSTHROUGH_IMAGE_EXTENSIONS: &[&str] = &[
     "gif",  // animated — cannot be converted to static avif/webp without losing animation
     "apng", // animated PNG — cannot be converted to static avif/webp without losing animation
 ];
-
-/// Registry for active child process PIDs to ensure cleanup on termination.
-static ACTIVE_PROCESSES: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-
-/// Manages external child processes to ensure they are cleaned up on exit.
-pub struct ProcessManager;
-
-impl ProcessManager {
-    /// Registers a child process PID for tracking.
-    pub fn register(pid: u32) {
-        if let Ok(mut pids) = ACTIVE_PROCESSES.lock() {
-            pids.insert(pid);
-        }
-    }
-
-    /// Unregisters a child process PID once it has completed.
-    pub fn unregister(pid: u32) {
-        if let Ok(mut pids) = ACTIVE_PROCESSES.lock() {
-            pids.remove(&pid);
-        }
-    }
-
-    /// Kills all registered child processes and signals shutdown.
-    pub fn kill_all() {
-        SHUTDOWN.store(true, Ordering::SeqCst);
-        if let Ok(mut pids) = ACTIVE_PROCESSES.lock() {
-            for &pid in pids.iter() {
-                let _ = std::process::Command::new("kill")
-                    .arg("-9")
-                    .arg(pid.to_string())
-                    .status();
-            }
-            pids.clear();
-        }
-    }
-}
 
 /// Path utilities for source and destination management.
 pub struct PathUtil;

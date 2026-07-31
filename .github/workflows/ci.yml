@@ -31,9 +31,7 @@ jobs:
       - name: System build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm clang pkg-config libdav1d-dev \
-            libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev \
-            libavdevice-dev libswscale-dev libswresample-dev
+          sudo apt-get install -y nasm clang pkg-config libdav1d-dev
 
       # Optional — only for crates that need native libs at build time:
       # - name: System build dependencies

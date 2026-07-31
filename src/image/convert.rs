@@ -2,8 +2,7 @@ use crate::constants::{CHANNEL_BUFFER_MULTIPLIER, MAX_ANALYSIS_SPINNERS};
 use crate::image::{ConversionSummary, ImageArgs, ImageError, Result, Task, TaskType};
 use crate::walker::{Asset, MediaSource, Walker};
 use crate::{
-    CpuControl, IMAGE_EXTENSIONS, Naming, PASSTHROUGH_IMAGE_EXTENSIONS, PathUtil, SHUTDOWN,
-    VIDEO_EXTENSIONS, ui,
+    CpuControl, IMAGE_EXTENSIONS, Naming, PASSTHROUGH_IMAGE_EXTENSIONS, PathUtil, SHUTDOWN, ui,
 };
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use image::{DynamicImage, GenericImageView, ImageFormat};
@@ -39,7 +38,6 @@ pub fn run(args: ImageArgs) -> anyhow::Result<()> {
 
     let mut extensions = Vec::new();
     extensions.extend_from_slice(IMAGE_EXTENSIONS);
-    extensions.extend_from_slice(VIDEO_EXTENSIONS);
     extensions.extend_from_slice(PASSTHROUGH_IMAGE_EXTENSIONS);
 
     let walker = Walker::new(&extensions, args.depth, true);
@@ -313,9 +311,7 @@ fn generate_filesystem_tasks(
             dest_path: target_file,
             task_type: TaskType::File,
         });
-    } else if VIDEO_EXTENSIONS.contains(&ext.as_str())
-        || PASSTHROUGH_IMAGE_EXTENSIONS.contains(&ext.as_str())
-    {
+    } else if PASSTHROUGH_IMAGE_EXTENSIONS.contains(&ext.as_str()) {
         let target_file = if source_path.is_file() {
             if dest_path.extension().is_some() {
                 dest_path.to_path_buf()
