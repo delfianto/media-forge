@@ -45,14 +45,6 @@ pub fn sub_bar_style() -> ProgressStyle {
         .progress_chars(PROGRESS_CHARS)
 }
 
-/// Returns the standard style for single file progress, typically used for long-running video encoding.
-pub fn file_progress_style() -> ProgressStyle {
-    ProgressStyle::default_bar()
-        .template("  {msg}\n  [{bar:40.yellow}] {percent}% {eta}")
-        .expect("Invalid template")
-        .progress_chars(PROGRESS_CHARS)
-}
-
 /// Creates and initializes a standard scanner progress bar with a message.
 pub fn create_scanner(msg: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();

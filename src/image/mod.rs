@@ -296,7 +296,7 @@ pub(crate) enum TaskType {
         /// The path of the file inside the archive.
         internal_path: String,
     },
-    /// Directly copying a non-image file.
+    /// Copying an already-modern or animated image without re-encoding it.
     Copy,
 }
 

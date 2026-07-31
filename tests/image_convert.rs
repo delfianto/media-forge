@@ -11,6 +11,7 @@ fn test_image_conversion_integration() {
     let img_path = source_dir.path().join("test.jpg");
     let img = image::RgbImage::new(100, 100);
     img.save(&img_path).unwrap();
+    fs::write(source_dir.path().join("clip.mp4"), b"not a real video").unwrap();
 
     let args = ImageArgs {
         destination: dest_dir.path().to_path_buf(),
@@ -29,6 +30,7 @@ fn test_image_conversion_integration() {
 
     let output_path = dest_dir.path().join("test.avif");
     assert!(output_path.exists());
+    assert!(!dest_dir.path().join("clip.mp4").exists());
 
     let out_img = image::open(&output_path).unwrap();
     assert_eq!(out_img.dimensions(), (100, 100));
