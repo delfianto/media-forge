@@ -2,6 +2,7 @@
 name = "media-forge"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.98.0"
 
 [lib]
 name = "media_forge"
@@ -29,7 +30,7 @@ serde = { version = "1.0", features = ["derive"] }
 ssimulacra2 = "0.5.1"
 thiserror = "2.0"
 walkdir = "2.5"
-zip = "2.4"
+zip = "8.6"
 
 [dev-dependencies]
 tempfile = "3.27"
