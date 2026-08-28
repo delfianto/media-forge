@@ -46,7 +46,9 @@ pub fn compute_quality_from_image(
 
     let img1_data = img1
         .to_rgb32f()
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|chunk| [chunk[0], chunk[1], chunk[2]])
         .collect::<Vec<_>>();
     let img1_rgb = Rgb::new(
@@ -60,7 +62,9 @@ pub fn compute_quality_from_image(
 
     let img2_data = img2
         .to_rgb32f()
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|chunk| [chunk[0], chunk[1], chunk[2]])
         .collect::<Vec<_>>();
     let img2_rgb = Rgb::new(

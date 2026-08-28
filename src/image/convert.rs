@@ -661,7 +661,9 @@ fn encode_avif(img: &DynamicImage, dest: &Path, quality: u8, speed: u8) -> Resul
 
     let pixels = img_rgba.as_raw();
     let rgba_pixels: Vec<ravif::RGBA8> = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| ravif::RGBA8 {
             r: chunk[0],
             g: chunk[1],
