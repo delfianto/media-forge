@@ -20,7 +20,7 @@ csv = "1.4.0"
 ctrlc = "3.5"
 image = { version = "0.25", features = ["avif", "avif-native", "bmp", "jpeg", "png", "tiff", "webp"] }
 indicatif = { version = "0.18", features = ["rayon"] }
-mimalloc = { version = "0.1", features = ["v3"] }
+mimalloc = "0.1.52"
 natord = "1.0"
 num_cpus = "1.17"
 path-clean = "1.0"
