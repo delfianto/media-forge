@@ -155,8 +155,9 @@ impl Walker {
         for i in 0..archive.len() {
             if let Ok(file) = archive.by_index(i)
                 && file.is_file()
+                && let Ok(name) = file.name()
             {
-                let name = file.name().to_string();
+                let name = name.to_string();
                 let entry_path = Path::new(&name);
                 let entry_ext = entry_path
                     .extension()

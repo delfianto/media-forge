@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.6", features = ["derive"] }
-crossbeam-channel = "0.5.16"
+crossbeam-channel = "0.5.17"
 csv = "1.4.0"
 ctrlc = "3.5"
 image = { version = "0.25", features = ["avif", "avif-native", "bmp", "jpeg", "png", "tiff", "webp"] }
@@ -30,7 +30,7 @@ serde = { version = "1.0", features = ["derive"] }
 ssimulacra2 = "0.5.1"
 thiserror = "2.0"
 walkdir = "2.5"
-zip = "8.6"
+zip = "9.5"
 
 [dev-dependencies]
 tempfile = "3.27"

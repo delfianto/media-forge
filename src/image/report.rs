@@ -278,7 +278,7 @@ fn collect_pairs_from_archive(
     for i in 0..archive.len() {
         let file = archive.by_index(i)?;
         if file.is_file() {
-            let name = file.name().to_string();
+            let name = file.name()?.to_string();
             let path = Path::new(&name);
             let ext = path
                 .extension()
