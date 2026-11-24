@@ -1,16 +1,17 @@
-pkgname=media-forge-bin
+pkgname=media-forge
 pkgver=0.2.1
-pkgrel=1
+pkgrel=2
 pkgdesc='AVIF and WebP conversion, image quality scoring, and CBZ archives'
 arch=('x86_64')
 url='https://github.com/delfianto/media-forge'
 license=('MIT')
 depends=('glibc' 'libgcc' 'dav1d')
-provides=("media-forge=$pkgver")
-conflicts=('media-forge')
+provides=("media-forge-bin=$pkgver-$pkgrel")
+conflicts=('media-forge-bin')
+replaces=('media-forge-bin')
 options=('!strip' '!debug')
 _archive="media-forge-v$pkgver-linux-x86_64"
-source=("$url/releases/download/v$pkgver/$_archive.tar.gz")
+source=("$url/releases/download/arch-v$pkgver-$pkgrel/$_archive.tar.gz")
 sha256sums=('9711f3599252c1e35c366816154104fe480ae2a4907e3d97bd84ddf73e9c7f53')
 
 package() {

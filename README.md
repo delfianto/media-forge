@@ -32,12 +32,13 @@ visible during large conversion jobs.
 
 The package installs `media-forge`. Executables are installed under `/usr/bin`.
 
-Download the `.pkg.tar.zst` from [GitHub Releases](https://github.com/delfianto/media-forge/releases/latest)
-and install it with `sudo pacman -U ./<package-file>`, or build the package
-from the checksum-verified release archive with `makepkg -si`:
+Download the `media-forge` package from [GitHub Releases](https://github.com/delfianto/media-forge/releases/latest)
+and install it with `sudo pacman -U ./<package-file>`. If pacman asks to remove the
+previous package, answer `y`. You can also build the package from the
+checksum-verified release archive with `makepkg -si`:
 
 ```sh
-git clone --branch v0.2.1 https://github.com/delfianto/media-forge.git
+git clone --branch arch-v0.2.1-2 https://github.com/delfianto/media-forge.git
 cd media-forge/arch
 makepkg -si
 ```
