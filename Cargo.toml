@@ -1,8 +1,8 @@
 [package]
 name = "media-forge"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-rust-version = "1.98.0"
+rust-version = "1.100.0"
 
 [lib]
 name = "media_forge"
@@ -23,14 +23,13 @@ indicatif = { version = "0.18", features = ["rayon"] }
 mimalloc = "0.1.52"
 natord = "1.0"
 num_cpus = "1.17"
-path-clean = "1.0"
 ravif = "0.13"
 rayon = "1.12"
 serde = { version = "1.0", features = ["derive"] }
 ssimulacra2 = "0.5.1"
 thiserror = "2.0"
 walkdir = "2.5"
-zip = "9.5"
+zip = "9.8"
 
 [dev-dependencies]
 tempfile = "3.27"
