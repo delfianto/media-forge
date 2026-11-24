@@ -19,7 +19,6 @@ and transcoding belong in
 ## Requirements
 
 - Linux
-- A current stable Rust toolchain when building from source
 - `clang`, `nasm`, `pkg-config`, and the dav1d development library
 - No GPU or FFmpeg dependency
 
@@ -28,6 +27,24 @@ where available. Hardware instability or an unstable overclock can become
 visible during large conversion jobs.
 
 ## Installation
+
+### Arch Linux (x86_64)
+
+The package installs `media-forge`. Executables are installed under `/usr/local/bin`.
+
+Download the `.pkg.tar.zst` from [GitHub Releases](https://github.com/delfianto/media-forge/releases/latest)
+and install it with `sudo pacman -U ./<package-file>`, or build the package
+from the checksum-verified release archive with `makepkg -si`:
+
+```sh
+git clone --branch v0.2.0 https://github.com/delfianto/media-forge.git
+cd media-forge/arch
+makepkg -si
+```
+
+### Build from source
+
+Source builds require Rust 1.100.0 or later.
 
 ```bash
 git clone https://github.com/delfianto/media-forge.git

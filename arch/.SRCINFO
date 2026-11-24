@@ -1,0 +1,18 @@
+pkgbase = media-forge-bin
+	pkgdesc = AVIF and WebP conversion, image quality scoring, and CBZ archives
+	pkgver = 0.2.0
+	pkgrel = 1
+	url = https://github.com/delfianto/media-forge
+	arch = x86_64
+	license = MIT
+	depends = glibc
+	depends = libgcc
+	depends = dav1d
+	provides = media-forge=0.2.0
+	conflicts = media-forge
+	options = !strip
+	options = !debug
+	source = https://github.com/delfianto/media-forge/releases/download/v0.2.0/media-forge-v0.2.0-linux-x86_64.tar.gz
+	sha256sums = b2520a4982d72f431ea3eecb6f971416ec94c38e79b86b62d8c5044c1f908e7b
+
+pkgname = media-forge-bin
