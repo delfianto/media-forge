@@ -1,5 +1,5 @@
 pkgname=media-forge-bin
-pkgver=0.2.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc='AVIF and WebP conversion, image quality scoring, and CBZ archives'
 arch=('x86_64')
@@ -11,10 +11,10 @@ conflicts=('media-forge')
 options=('!strip' '!debug')
 _archive="media-forge-v$pkgver-linux-x86_64"
 source=("$url/releases/download/v$pkgver/$_archive.tar.gz")
-sha256sums=('b2520a4982d72f431ea3eecb6f971416ec94c38e79b86b62d8c5044c1f908e7b')
+sha256sums=('9711f3599252c1e35c366816154104fe480ae2a4907e3d97bd84ddf73e9c7f53')
 
 package() {
     cd "$srcdir/$_archive"
-    install -Dm0755 media-forge "$pkgdir/usr/local/bin/media-forge"
+    install -Dm0755 media-forge "$pkgdir/usr/bin/media-forge"
     install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
